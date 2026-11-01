@@ -61,15 +61,35 @@ public static class Http
 
     /// <summary>带重试的 GET，返回字符串。失败抛出最后一次异常。</summary>
     public static async Task<string> GetStringAsync(string url, int retry = 3, CancellationToken ct = default)
+        => await GetStringAsync(url, retry, null, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// 带重试与单次超时的 GET。用于元数据查询这类「快速失败」场景，
+    /// 避免一个不可达的来源把整体拖到全局 180 秒超时。
+    /// </summary>
+    public static async Task<string> GetStringAsync(string url, int retry,
+        TimeSpan? perRequestTimeout, CancellationToken ct = default)
     {
         Exception? last = null;
         for (var i = 0; i < Math.Max(1, retry); i++)
         {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (perRequestTimeout is { } timeout) cts.CancelAfter(timeout);
+
             try
             {
-                using var resp = await Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+                using var resp = await Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token)
+                    .ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
-                return await resp.Content.ReadAsStringAsync(ct);
+                return await resp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException && !ct.IsCancellationRequested
+                                        && perRequestTimeout is not null)
+            {
+                // 单次超时：直接记录为失败，让调用方切换下一个来源，不再重试浪费时间
+                last = new TimeoutException($"请求超时（>{perRequestTimeout.Value.TotalSeconds:F0}s）: {url}", ex);
+                Logger.Warn($"HTTP 超时 {url}");
+                break;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -79,7 +99,7 @@ public static class Http
             {
                 last = ex;
                 Logger.Warn($"HTTP 请求失败({i + 1}/{retry}) {url}: {ex.Message}");
-                await Task.Delay(600 * (i + 1), ct);
+                await Task.Delay(600 * (i + 1), ct).ConfigureAwait(false);
             }
         }
 

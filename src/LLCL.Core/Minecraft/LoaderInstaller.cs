@@ -19,6 +19,9 @@ public static class LoaderInstaller
 {
     public enum Kind { Fabric, Quilt, Forge, NeoForge }
 
+    /// <summary>单个来源的查询超时。不可达的源要尽快失败，避免拖慢界面。</summary>
+    private static readonly TimeSpan LoaderQueryTimeout = TimeSpan.FromSeconds(8);
+
     // ---------------- 元数据查询 ----------------
 
     /// <summary>查询可用加载器版本。</summary>
@@ -37,34 +40,65 @@ public static class LoaderInstaller
 
     private static async Task<List<LoaderVersionInfo>> _GetFabricVersionsAsync(string mc, CancellationToken ct)
     {
+        // 镜像优先：官方源在国内经常完全不可达，放在后面只会白白等待超时
         var urls = new[]
         {
-            $"https://meta.fabricmc.net/v2/versions/loader/{mc}",
-            $"https://bmclapi2.bangbang93.com/fabric-meta/v2/versions/loader/{mc}"
+            $"https://bmclapi2.bangbang93.com/fabric-meta/v2/versions/loader/{mc}",
+            $"https://meta.fabricmc.net/v2/versions/loader/{mc}"
         };
 
+        return await _QueryFirstAsync(urls, url => _ParseFabricAsync(url, mc, ct), ct)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<List<LoaderVersionInfo>> _ParseFabricAsync(string url, string mc,
+        CancellationToken ct)
+    {
+        var json = await Net.Http.GetStringAsync(url, 1, LoaderQueryTimeout, ct).ConfigureAwait(false);
+        if (JsonNode.Parse(json) is not JsonArray arr) return [];
+
+        var list = new List<LoaderVersionInfo>();
+        foreach (var item in arr)
+        {
+            var loader = item?["loader"]?["version"]?.GetValue<string>();
+            if (loader is null) continue;
+            var stable = item?["loader"]?["stable"]?.GetValue<bool>() ?? false;
+            list.Add(new LoaderVersionInfo { Version = loader, Stable = stable, McVersion = mc });
+        }
+
+        // 稳定版优先排前面
+        list.Sort((a, b) =>
+        {
+            if (a.Stable != b.Stable) return b.Stable.CompareTo(a.Stable);
+            return string.Compare(b.Version, a.Version, StringComparison.OrdinalIgnoreCase);
+        });
+
+        return list;
+    }
+
+    /// <summary>
+    /// 依次尝试多个来源，返回第一个成功且非空的结果。
+    /// 每个来源单独带超时，避免单个不可达源拖住整体。
+    /// </summary>
+    private static async Task<List<LoaderVersionInfo>> _QueryFirstAsync(
+        IEnumerable<string> urls, Func<string, Task<List<LoaderVersionInfo>>> fetch,
+        CancellationToken ct)
+    {
         foreach (var url in urls)
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
-                var json = await Net.Http.GetStringAsync(url, 2, ct).ConfigureAwait(false);
-                var arr = JsonNode.Parse(json) as JsonArray;
-                if (arr is null) continue;
-
-                var list = new List<LoaderVersionInfo>();
-                foreach (var item in arr)
+                var result = await fetch(url).ConfigureAwait(false);
+                if (result.Count > 0)
                 {
-                    var loader = item?["loader"]?["version"]?.GetValue<string>();
-                    if (loader is null) continue;
-                    var stable = item?["loader"]?["stable"]?.GetValue<bool>() ?? false;
-                    list.Add(new LoaderVersionInfo { Version = loader, Stable = stable, McVersion = mc });
+                    Logger.Info($"加载器版本查询成功: {url}");
+                    return result;
                 }
-
-                if (list.Count > 0) return list;
             }
             catch (Exception ex)
             {
-                Logger.Warn($"获取 Fabric 版本失败 {url}: {ex.Message}");
+                Logger.Warn($"加载器版本查询失败 {url}: {ex.Message}");
             }
         }
 
@@ -73,12 +107,14 @@ public static class LoaderInstaller
 
     private static async Task<List<LoaderVersionInfo>> _GetQuiltVersionsAsync(string mc, CancellationToken ct)
     {
+        // Quilt 没有国内镜像，只能直连；给较短超时避免长时间卡住
         try
         {
+            // Quilt 无国内镜像，官方源可达性一般；给较短超时避免拖慢界面
             var json = await Net.Http.GetStringAsync(
-                $"https://meta.quiltmc.org/v3/versions/loader/{mc}", 2, ct).ConfigureAwait(false);
-            var arr = JsonNode.Parse(json) as JsonArray;
-            if (arr is null) return [];
+                $"https://meta.quiltmc.org/v3/versions/loader/{mc}", 1,
+                TimeSpan.FromSeconds(6), ct).ConfigureAwait(false);
+            if (JsonNode.Parse(json) is not JsonArray arr) return [];
 
             var list = new List<LoaderVersionInfo>();
             foreach (var item in arr)
@@ -99,18 +135,19 @@ public static class LoaderInstaller
 
     private static async Task<List<LoaderVersionInfo>> _GetForgeVersionsAsync(string mc, CancellationToken ct)
     {
-        // 从 maven-metadata.xml 解析全部版本，过滤出该 MC 版本
+        // 镜像优先；官方 maven 在国内基本不可达
         var urls = new[]
         {
-            "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml",
-            "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/maven-metadata.xml"
+            "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/maven-metadata.xml",
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml"
         };
 
         foreach (var url in urls)
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
-                var xml = await Net.Http.GetStringAsync(url, 2, ct).ConfigureAwait(false);
+                var xml = await Net.Http.GetStringAsync(url, 1, LoaderQueryTimeout, ct).ConfigureAwait(false);
                 var versions = System.Text.RegularExpressions.Regex
                     .Matches(xml, "<version>([^<]+)</version>")
                     .Select(m => m.Groups[1].Value)
@@ -121,6 +158,7 @@ public static class LoaderInstaller
 
                 if (versions.Count == 0) continue;
 
+                Logger.Info($"Forge 版本查询成功: {url}");
                 return versions.Select(v => new LoaderVersionInfo
                 {
                     Version = v,
@@ -150,33 +188,58 @@ public static class LoaderInstaller
             "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge"
         };
 
-        // NeoForge 版本号形如 21.1.248，对应 MC 1.21.1（前两段即 MC 的 1.21.1 映射）
-        var mcParts = mc.Split('.');
-        var prefix = mcParts.Length >= 2 ? $"{mcParts[0]}.{mcParts[1]}." : null;
+        // NeoForge 版本号与 MC 版本的映射规则：
+        //   MC 1.21.1 → NeoForge 21.1.x   （去掉 "1." 前缀，保留 21.1）
+        //   MC 1.20.4 → NeoForge 20.4.x
+        //   MC 1.20.2 → NeoForge 20.2.x
+        // 注意不是简单地取前两段：1.21.1 的前两段是 "1.21"，而 NeoForge 用的是 "21.1"。
+        var prefix = BuildNeoForgePrefix(mc);
 
         foreach (var url in urls)
         {
+            ct.ThrowIfCancellationRequested();
             try
             {
-                var json = await Net.Http.GetStringAsync(url, 2, ct).ConfigureAwait(false);
+                var json = await Net.Http.GetStringAsync(url, 1, LoaderQueryTimeout, ct).ConfigureAwait(false);
                 List<string> versions;
 
                 var node = JsonNode.Parse(json);
-                if (node is JsonObject obj && obj["versions"] is JsonArray arr)
-                    versions = arr.Select(v => v?.GetValue<string>() ?? string.Empty).Where(v => v.Length > 0).ToList();
-                else if (node is JsonArray files)
-                    versions = files.Select(f => f?["name"]?.GetValue<string>() ?? string.Empty)
+                if (node is JsonObject obj)
+                {
+                    // 两种返回格式：
+                    //   { "versions": ["21.1.248", ...] }                    —— 官方 maven versions API
+                    //   { "files": [ { "name": "21.1.248", ... }, ... ] }    —— BMCLAPI 目录列表 API
+                    if (obj["versions"] is JsonArray arr)
+                        versions = arr.Select(v => v?.GetValue<string>() ?? string.Empty)
+                            .Where(v => v.Length > 0).ToList();
+                    else if (obj["files"] is JsonArray files)
+                        versions = files.Select(f => f?["name"]?.GetValue<string>() ?? string.Empty)
+                            .Where(v => v.Length > 0).ToList();
+                    else
+                        continue;
+                }
+                else if (node is JsonArray plain)
+                {
+                    versions = plain.Select(f => f?["name"]?.GetValue<string>() ?? string.Empty)
                         .Where(v => v.Length > 0).ToList();
+                }
                 else
+                {
                     continue;
+                }
 
                 if (prefix is not null)
                     versions = versions.Where(v => v.StartsWith(prefix, StringComparison.Ordinal)).ToList();
 
                 versions = versions.Where(v => !v.Contains('-')).Distinct().ToList();
 
-                if (versions.Count == 0) continue;
+                if (versions.Count == 0)
+                {
+                    Logger.Warn($"NeoForge 源 {url} 解析得到 0 个版本（prefix={prefix}）");
+                    continue;
+                }
 
+                Logger.Info($"NeoForge 版本查询成功: {url}，{versions.Count} 个");
                 return versions.Select(v => new LoaderVersionInfo
                 {
                     Version = v,
@@ -521,9 +584,33 @@ public static class LoaderInstaller
         Logger.Info($"已写入版本: {versionId}");
     }
 
+    /// <summary>
+    /// 把 MC 版本映射为 NeoForge 版本前缀。
+    /// 规则：去掉 "1." 前缀后，取前两段。
+    ///   1.21.1  → 21.1.
+    ///   1.20.4  → 20.4.
+    ///   1.19.2  → 19.2.
+    /// </summary>
+    private static string? BuildNeoForgePrefix(string mcVersion)
+    {
+        // 先去掉 "1." 这样的主版本前缀（旧式版本号）
+        var normalized = mcVersion.StartsWith("1.", StringComparison.Ordinal)
+            ? mcVersion[2..]
+            : mcVersion;
+
+        var parts = normalized.Split('.');
+        if (parts.Length < 2) return null;
+
+        return $"{parts[0]}.{parts[1]}.";
+    }
     private static void TryDelete(string path)
     {
         try { File.Delete(path); } catch { }
     }
 }
+
+
+
+
+
 

@@ -26,6 +26,12 @@ public sealed class DownloadTask
     public string? ErrorMessage { get; internal set; }
     public DateTime StartedAt { get; } = DateTime.Now;
 
+    /// <summary>
+    /// 该任务安装到的游戏版本 ID。
+    /// 取消时据此清理整个版本目录，避免留下半成品。
+    /// </summary>
+    public string? TargetVersion { get; set; }
+
     internal CancellationTokenSource? Cts { get; set; }
     internal FileDownloader? Downloader { get; set; }
     internal Task? Runner { get; set; }
@@ -111,9 +117,16 @@ public static class DownloadQueue
     /// <param name="work">实际下载逻辑，收到一个 <see cref="FileDownloader"/> 用于暂停控制。</param>
     /// <param name="ct">外部取消令牌。</param>
     public static async Task RunAsync(string title, DownloadTaskKind kind,
-        Func<FileDownloader, CancellationToken, Task> work, CancellationToken ct = default)
+        Func<FileDownloader, CancellationToken, Task> work, CancellationToken ct = default,
+        string? targetVersion = null)
     {
-        var task = new DownloadTask { Title = title, Kind = kind, State = DownloadState.Idle };
+        var task = new DownloadTask
+        {
+            Title = title,
+            Kind = kind,
+            State = DownloadState.Idle,
+            TargetVersion = targetVersion
+        };
 
         lock (_lock)
         {
@@ -253,6 +266,66 @@ public static class DownloadQueue
         if (affected.Count == 0) Changed?.Invoke();
     }
 
+    /// <summary>
+    /// 取消任务并彻底清理：删除该版本目录下的全部文件（含已完成部分），
+    /// 让下一次安装从干净状态开始。
+    /// </summary>
+    public static void CancelAndPurge(string taskId)
+    {
+        DownloadTask? target;
+        var affected = new List<DownloadTask>();
+
+        lock (_lock)
+        {
+            target = _tasks.FirstOrDefault(t => t.Id == taskId);
+            if (target is null) return;
+
+            target.Downloader?.Cancel();
+            try { target.Cts?.Cancel(); } catch { }
+            affected.Add(target);
+
+            // 同版本的其它任务一并取消（例如先下原版再装加载器）
+            var version = target.TargetVersion;
+            if (!string.IsNullOrEmpty(version))
+            {
+                foreach (var other in _tasks)
+                {
+                    if (other.Id == taskId) continue;
+                    if (!string.Equals(other.TargetVersion, version, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (other.State is DownloadState.Completed or DownloadState.Failed
+                        or DownloadState.Canceled) continue;
+
+                    other.Downloader?.Cancel();
+                    try { other.Cts?.Cancel(); } catch { }
+                    affected.Add(other);
+                }
+            }
+        }
+
+        foreach (var task in affected) _Notify(task);
+
+        if (!string.IsNullOrEmpty(target.TargetVersion))
+            PurgeVersionDirectory(target.TargetVersion);
+    }
+
+    /// <summary>彻底删除某个版本的目录与相关缓存文件。</summary>
+    private static void PurgeVersionDirectory(string versionId)
+    {
+        try
+        {
+            var versionDir = Path.Combine(Paths.VersionsDir, versionId);
+            if (Directory.Exists(versionDir))
+            {
+                Directory.Delete(versionDir, true);
+                Logger.Info($"已删除版本目录: {versionDir}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"删除版本目录失败 {versionId}: {ex.Message}");
+        }
+    }
     /// <summary>移除已完成 / 失败 / 取消的任务记录。</summary>
     public static void PruneFinished()
     {
@@ -276,3 +349,5 @@ public static class DownloadQueue
         Changed?.Invoke();
     }
 }
+
+

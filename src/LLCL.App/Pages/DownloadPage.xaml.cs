@@ -102,10 +102,30 @@ public sealed partial class DownloadPage : Page
 
         // 游戏版本就绪后，若当前就在加载器页，立即查询并自动选中加载器版本
         if (_section == "loader") _ = LoadLoaderVersionsAsync();
+
+        // 后台预热四种加载器版本，切过去时无需等待网络
+        var defaultMc = McVersionCombo.SelectedItem as string;
+        if (!string.IsNullOrEmpty(defaultMc)) PrefetchLoaders(defaultMc);
     }
 
     #endregion
 
+    /// <summary>按 Tag 切换到指定分类（会同步左侧导航的选中状态）。</summary>
+    private void SelectSection(string tag)
+    {
+        foreach (var list in new[] { GameNav, ResourceNav, OtherNav })
+        {
+            foreach (var raw in list.Items)
+            {
+                if (raw is ListViewItem item && item.Tag is string t &&
+                    string.Equals(t, tag, StringComparison.Ordinal))
+                {
+                    list.SelectedItem = item;
+                    return;
+                }
+            }
+        }
+    }
     #region 分类导航
 
     private void Nav_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -252,27 +272,24 @@ public sealed partial class DownloadPage : Page
         // 游戏版本未就绪时不做查询；等 PopulateMcVersions 选好默认项后会再次调用
         if (string.IsNullOrEmpty(mc)) return;
 
+        var kind = CurrentLoaderKind();
+
+        // 已有缓存则立即使用，切换加载器标签时无需重新等网络
+        if (_loaderCache.TryGetValue((kind, mc), out var cached))
+        {
+            ApplyLoaderVersions(cached, mc);
+            return;
+        }
+
         LoaderVersionCombo.Items.Clear();
         LoaderSummary.Text = "正在查询加载器版本…";
         InstallLoaderButton.IsEnabled = false;
 
         try
         {
-            var versions = await LoaderInstaller.GetVersionsAsync(CurrentLoaderKind(), mc);
-            foreach (var v in versions.Take(80)) LoaderVersionCombo.Items.Add(v.Version);
-
-            // 自动选中最新版本，避免用户必须手动点一次才能安装
-            if (LoaderVersionCombo.Items.Count > 0)
-            {
-                LoaderVersionCombo.SelectedIndex = 0;
-                LoaderVersionCombo.UpdateLayout();
-            }
-
-            LoaderSummary.Text = versions.Count == 0
-                ? $"未找到适用于 {mc} 的 {CurrentLoaderName()} 版本"
-                : $"{CurrentLoaderName()} · {mc} · 共 {versions.Count} 个可用版本";
-            InstallLoaderButton.IsEnabled = versions.Count > 0;
-            UpdateLoaderNote(mc);
+            var versions = await LoaderInstaller.GetVersionsAsync(kind, mc);
+            _loaderCache[(kind, mc)] = versions;
+            ApplyLoaderVersions(versions, mc);
         }
         catch (Exception ex)
         {
@@ -280,6 +297,58 @@ public sealed partial class DownloadPage : Page
             Logger.Error(ex, "查询加载器版本失败");
         }
     }
+
+    /// <summary>把查询结果填入下拉框并自动选中最新版本。</summary>
+    private void ApplyLoaderVersions(List<LoaderVersionInfo> versions, string mc)
+    {
+        LoaderVersionCombo.Items.Clear();
+        foreach (var v in versions.Take(80)) LoaderVersionCombo.Items.Add(v.Version);
+
+        if (LoaderVersionCombo.Items.Count > 0)
+        {
+            // 自动选中最新版本，用户无需手动点选即可安装
+            LoaderVersionCombo.SelectedIndex = 0;
+        }
+
+        LoaderSummary.Text = versions.Count == 0
+            ? $"未找到适用于 {mc} 的 {CurrentLoaderName()} 版本"
+            : $"{CurrentLoaderName()} · {mc} · 共 {versions.Count} 个可用版本";
+        InstallLoaderButton.IsEnabled = versions.Count > 0;
+        UpdateLoaderNote(mc);
+    }
+
+    /// <summary>
+    /// 后台预热四种加载器的版本列表。
+    /// 用户切到「模组加载器」页时通常已经有结果，不再干等网络。
+    /// </summary>
+    private void PrefetchLoaders(string mc)
+    {
+        foreach (var kind in new[]
+                 {
+                     LoaderInstaller.Kind.Fabric, LoaderInstaller.Kind.Quilt,
+                     LoaderInstaller.Kind.Forge, LoaderInstaller.Kind.NeoForge
+                 })
+        {
+            var key = (kind, mc);
+            if (_loaderCache.ContainsKey(key)) continue;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var versions = await LoaderInstaller.GetVersionsAsync(kind, mc);
+                    _loaderCache[key] = versions;
+                    Logger.Info($"预热 {kind} {mc}: {versions.Count} 个版本");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"预热 {kind} {mc} 失败: {ex.Message}");
+                }
+            });
+        }
+    }
+
+    private readonly Dictionary<(LoaderInstaller.Kind, string), List<LoaderVersionInfo>> _loaderCache = new();
 
     private void UpdateLoaderNote(string mc)
     {
@@ -333,7 +402,7 @@ public sealed partial class DownloadPage : Page
 
                     newId = await LoaderInstaller.InstallAsync(CurrentLoaderKind(), mc, loaderVersion,
                         progress, token);
-                }, _cts!.Token);
+                }, _cts!.Token, mc);
 
             ProgressText.Text = $"✓ {newId} 安装完成";
             SelectedText.Text = $"已安装 {newId}";
@@ -487,7 +556,7 @@ public sealed partial class DownloadPage : Page
                 async (_, token) =>
                 {
                     await VanillaInstaller.InstallAsync(_selectedVersion!, Paths.VersionsDir, progress, token);
-                }, _cts!.Token);
+                }, _cts!.Token, _selectedVersion);
 
             LauncherConfig.Current.LastInstance = _selectedVersion;
             LauncherConfig.Current.Save();
@@ -565,7 +634,7 @@ public sealed partial class DownloadPage : Page
                 async (_, token) =>
                 {
                     await ResourceService.DownloadToVersionAsync(file, targetVersion, type, progress, token);
-                });
+                }, targetVersion: targetVersion);
 
             ProgressText.Text = $"✓ 已下载 {file.FileName} 到 {targetVersion}";
         }
@@ -715,22 +784,7 @@ public sealed partial class DownloadPage : Page
         var task = DownloadQueue.Tasks.FirstOrDefault(t => t.Id == id);
         if (task is null) return;
 
-        var confirm = new ContentDialog
-        {
-            Title = "取消下载",
-            Content = $"将取消「{task.Title}」并删除已下载的临时文件，确定继续吗？",
-            PrimaryButtonText = "取消并清理",
-            CloseButtonText = "保留",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot
-        };
-
-        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
-
-        DownloadQueue.Cancel(id);
-        DownloadQueue.PruneFinished();
-        RefreshTasks();
-        ProgressText.Text = "已取消并清理临时文件";
+        await ConfirmAndCancelTaskAsync(task);
     }
 
     #endregion
@@ -747,6 +801,9 @@ public sealed partial class DownloadPage : Page
         DownloadProgress.Visibility = Visibility.Visible;
         DownloadProgress.Value = 0;
         _cts = new CancellationTokenSource();
+
+        // 下载一开始就切到「下载任务」页，用户能立刻看到进度与取消入口
+        SelectSection("tasks");
     }
 
     private void EndBusy()
@@ -787,10 +844,55 @@ public sealed partial class DownloadPage : Page
         }
     }
 
-    private void Cancel_Click(object sender, RoutedEventArgs e)
+    private async void Cancel_Click(object sender, RoutedEventArgs e)
     {
+        // 找出当前正在进行的任务，走「整版本清理」流程
+        var running = DownloadQueue.Tasks.FirstOrDefault(t =>
+            t.State is DownloadState.Running or DownloadState.Paused);
+
+        if (running is not null)
+        {
+            await ConfirmAndCancelTaskAsync(running);
+            return;
+        }
+
+        // 兜底：没有活跃任务时直接取消全部
         _cts?.Cancel();
         DownloadQueue.Cancel();
+    }
+
+    /// <summary>弹出确认框并执行「取消 + 整版本清理」。</summary>
+    private async Task ConfirmAndCancelTaskAsync(DownloadTask task)
+    {
+        var versionHint = string.IsNullOrEmpty(task.TargetVersion)
+            ? string.Empty
+            : $"\n\n会连同版本「{task.TargetVersion}」的整个目录一并删除，" +
+              "包括已经下载完成的部分文件，以便下次安装从干净状态开始。";
+
+        var confirm = new ContentDialog
+        {
+            Title = "取消并清理下载",
+            Content = $"将取消「{task.Title}」并清理磁盘上的相关内容，确定继续吗？{versionHint}",
+            PrimaryButtonText = "取消并清理",
+            CloseButtonText = "只暂停",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary)
+        {
+            DownloadQueue.Pause(task.Id);
+            RefreshTasks();
+            ProgressText.Text = "已暂停下载，点击“继续”可续传";
+            return;
+        }
+
+        DownloadQueue.CancelAndPurge(task.Id);
+        DownloadQueue.PruneFinished();
+        RefreshTasks();
+        ProgressText.Text = string.IsNullOrEmpty(task.TargetVersion)
+            ? "已取消并清理下载内容"
+            : $"已取消，并删除版本「{task.TargetVersion}」的全部文件";
     }
 
     private void SourceSettings_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("settings");
@@ -828,4 +930,8 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
+
+
+
 
