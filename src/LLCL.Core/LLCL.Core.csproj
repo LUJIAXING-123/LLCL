@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <_LlclRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))</_LlclRepoRoot>
+    </PropertyGroup>
+    <Import Project="$(_LlclRepoRoot)build\Version.props" />
+
+    <PropertyGroup>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <RootNamespace>LLCL.Core</RootNamespace>
+        <AssemblyName>LLCL.Core</AssemblyName>
+        <Nullable>enable</Nullable>
+        <LangVersion>14</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <Description>LLCL 启动器核心库</Description>
+        <Product>LL Craft Launcher</Product>
+        <Company>LL STUDIO</Company>
+        <Copyright>Copyright © LL STUDIO</Copyright>
+    </PropertyGroup>
+
+    <Target Name="LlclApplyVersion" BeforeTargets="PrepareForBuild;GenerateAssemblyInfo" DependsOnTargets="LlclReadVersion">
+        <PropertyGroup>
+            <Version>$(LlclVersion)</Version>
+            <AssemblyVersion>$(_LlclAssemblyVersion)</AssemblyVersion>
+            <FileVersion>$(_LlclAssemblyVersion)</FileVersion>
+            <InformationalVersion>$(LlclVersion)</InformationalVersion>
+        </PropertyGroup>
+    </Target>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+        <PackageReference Include="SharpZipLib" Version="1.4.2" />
+    </ItemGroup>
+
+    <Import Project="$(_LlclRepoRoot)build\Version.targets" />
+</Project>
+

@@ -1,0 +1,479 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+
+namespace LLCL.Core.Net;
+
+/// <summary>一个待下载文件。</summary>
+public sealed class DownloadItem
+{
+    /// <summary>官方 URL，实际请求会经 <see cref="DownloadMirror.MapUrl"/> 映射到当前下载源。</summary>
+    public string Url { get; set; } = string.Empty;
+
+    /// <summary>目标绝对路径。</summary>
+    public string TargetPath { get; set; } = string.Empty;
+
+    /// <summary>期望的 SHA1（小写），空表示不校验。</summary>
+    public string? Sha1 { get; set; }
+
+    /// <summary>期望大小，0 表示未知。</summary>
+    public long Size { get; set; }
+
+    /// <summary>备用 URL 列表（镜像 / 官方交叉回退）。</summary>
+    public List<string> FallbackUrls { get; } = [];
+
+    public override string ToString() => $"{TargetPath} <- {Url}";
+}
+
+public sealed class DownloadProgressEventArgs : EventArgs
+{
+    public long TotalBytes { get; init; }
+    public long DownloadedBytes { get; init; }
+    public long TotalFiles { get; init; }
+    public long CompletedFiles { get; init; }
+    public long FailedFiles { get; init; }
+    public long SpeedBytesPerSecond { get; init; }
+    public string? CurrentFile { get; init; }
+
+    /// <summary>0..1 的比例。</summary>
+    public double Ratio => TotalBytes > 0
+        ? Math.Clamp((double)DownloadedBytes / TotalBytes, 0, 1)
+        : TotalFiles > 0 ? Math.Clamp((double)CompletedFiles / TotalFiles, 0, 1) : 0;
+}
+
+/// <summary>下载执行状态。</summary>
+public enum DownloadState
+{
+    Idle,
+    Running,
+    Paused,
+    Completed,
+    Failed,
+    Canceled
+}
+
+/// <summary>
+/// 多线程文件下载器。
+/// <list type="bullet">
+///   <item>SHA1 完整性校验：校验失败自动重试，并回退到备用源</item>
+///   <item>断点续传：利用 HTTP Range 从 .part 文件继续</item>
+///   <item>可暂停 / 继续（<see cref="Pause"/> / <see cref="Resume"/>）</item>
+///   <item>限速</item>
+/// </list>
+/// </summary>
+public sealed class FileDownloader
+{
+    private long _downloaded;
+    private long _totalBytes;
+    private long _completedFiles;
+    private long _failedFiles;
+    private long _totalFiles;
+    private long _lastSpeedTick;
+    private long _lastSpeedBytes;
+    private volatile int _speedLimitKb;
+
+    private readonly object _gate = new();
+    private readonly ManualResetEventSlim _resumeGate = new(true);
+    private volatile bool _paused;
+    private CancellationTokenSource? _innerCts;
+
+    public event EventHandler<DownloadProgressEventArgs>? Progress;
+
+    public DownloadState State { get; private set; } = DownloadState.Idle;
+
+    /// <summary>当前是否处于暂停状态。</summary>
+    public bool IsPaused => _paused;
+
+    public FileDownloader()
+    {
+        _speedLimitKb = LauncherConfig.Current.DownloadSpeedLimitKb;
+    }
+
+    /// <summary>暂停下载。已在传输中的分块会先完成再停下。</summary>
+    public void Pause()
+    {
+        lock (_gate)
+        {
+            if (State != DownloadState.Running) return;
+            _paused = true;
+            State = DownloadState.Paused;
+            _resumeGate.Reset();
+            Logger.Info("下载已暂停");
+        }
+    }
+
+    /// <summary>继续下载。</summary>
+    public void Resume()
+    {
+        lock (_gate)
+        {
+            if (State != DownloadState.Paused) return;
+            _paused = false;
+            State = DownloadState.Running;
+            _resumeGate.Set();
+            Logger.Info("下载已继续");
+        }
+    }
+
+    /// <summary>取消下载（与暂停不同，取消会放弃未完成文件）。</summary>
+    public void Cancel()
+    {
+        lock (_gate)
+        {
+            _paused = false;
+            _resumeGate.Set();
+            _innerCts?.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// 并发下载一组文件。已存在且哈希一致的文件将被跳过。
+    /// </summary>
+    public async Task DownloadAllAsync(IReadOnlyList<DownloadItem> items, CancellationToken ct = default)
+    {
+        _totalFiles = items.Count;
+        _completedFiles = 0;
+        _failedFiles = 0;
+        _totalBytes = items.Sum(i => Math.Max(0, i.Size));
+        _downloaded = 0;
+        _lastSpeedTick = Environment.TickCount64;
+        _lastSpeedBytes = 0;
+        _paused = false;
+        _resumeGate.Set();
+        State = DownloadState.Running;
+
+        _innerCts = new CancellationTokenSource();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _innerCts.Token);
+        var token = linked.Token;
+
+        try
+        {
+            var missing = new List<DownloadItem>();
+            foreach (var item in items)
+            {
+                token.ThrowIfCancellationRequested();
+                if (await _IsValidAsync(item, token).ConfigureAwait(false))
+                {
+                    Interlocked.Increment(ref _completedFiles);
+                    Interlocked.Add(ref _downloaded, Math.Max(0, item.Size));
+                }
+                else
+                {
+                    missing.Add(item);
+                }
+            }
+
+            _RaiseProgress(null);
+
+            if (missing.Count == 0)
+            {
+                State = DownloadState.Completed;
+                _RaiseProgress(null);
+                return;
+            }
+
+            await _DownloadMissingAsync(missing, token).ConfigureAwait(false);
+
+            _RaiseProgress(null);
+            State = _failedFiles > 0 ? DownloadState.Failed : DownloadState.Completed;
+        }
+        catch (OperationCanceledException)
+        {
+            State = DownloadState.Canceled;
+            throw;
+        }
+        finally
+        {
+            _innerCts?.Dispose();
+            _innerCts = null;
+        }
+    }
+
+    private async Task _DownloadMissingAsync(List<DownloadItem> missing, CancellationToken ct)
+    {
+        var threads = Math.Clamp(LauncherConfig.Current.DownloadThreads, 1, 256);
+        var retry = Math.Max(1, LauncherConfig.Current.DownloadRetry);
+        var queue = new ConcurrentQueue<DownloadItem>(missing);
+        var errors = new ConcurrentBag<Exception>();
+
+        var workers = Enumerable.Range(0, Math.Min(threads, missing.Count)).Select(_ => Task.Run(async () =>
+        {
+            while (!ct.IsCancellationRequested && queue.TryDequeue(out var item))
+            {
+                // 暂停时等待
+                await _WaitIfPausedAsync(ct).ConfigureAwait(false);
+
+                Exception? lastError = null;
+                for (var attempt = 0; attempt < retry; attempt++)
+                {
+                    try
+                    {
+                        await _DownloadOneAsync(item, ct).ConfigureAwait(false);
+                        Interlocked.Increment(ref _completedFiles);
+                        lastError = null;
+                        break;
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        lastError = ex;
+                        Logger.Warn($"下载失败({attempt + 1}/{retry}) {item.Url}: {ex.Message}");
+                        // 哈希失败时删掉损坏文件，保证下次是干净重试
+                        if (ex is InvalidDataException) _TryDelete(item.TargetPath);
+                        await Task.Delay(600 * (attempt + 1), ct).ConfigureAwait(false);
+                    }
+                }
+
+                if (lastError is not null)
+                {
+                    errors.Add(new Exception($"下载失败: {Path.GetFileName(item.TargetPath)}", lastError));
+                    Interlocked.Increment(ref _failedFiles);
+                    Interlocked.Increment(ref _completedFiles);
+                }
+
+                _RaiseProgress(item.TargetPath);
+            }
+        }, ct)).ToArray();
+
+        await Task.WhenAll(workers).ConfigureAwait(false);
+
+        if (!errors.IsEmpty)
+            throw new AggregateException("部分文件下载失败", errors);
+    }
+
+    private async Task _WaitIfPausedAsync(CancellationToken ct)
+    {
+        if (!_paused) return;
+        while (!_resumeGate.IsSet && !ct.IsCancellationRequested)
+        {
+            await Task.Delay(100, ct).ConfigureAwait(false);
+        }
+
+        ct.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>校验已存在的文件是否符合预期（大小 + SHA1）。</summary>
+    public async Task<bool> IsValidAsync(DownloadItem item, CancellationToken ct = default)
+        => await _IsValidAsync(item, ct).ConfigureAwait(false);
+
+    private async Task<bool> _IsValidAsync(DownloadItem item, CancellationToken ct)
+    {
+        try
+        {
+            if (!File.Exists(item.TargetPath)) return false;
+
+            var info = new FileInfo(item.TargetPath);
+            if (item.Size > 0 && info.Length != item.Size) return false;
+            if (string.IsNullOrEmpty(item.Sha1)) return true;
+
+            var actual = await _HashFileAsync(item.TargetPath, ct).ConfigureAwait(false);
+            return string.Equals(actual, item.Sha1, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"校验文件失败 {item.TargetPath}: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static async Task<string> _HashFileAsync(string path, CancellationToken ct)
+    {
+        await using var stream = File.OpenRead(path);
+        var hash = await SHA1.HashDataAsync(stream, ct).ConfigureAwait(false);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private async Task _DownloadOneAsync(DownloadItem item, CancellationToken ct)
+    {
+        var urls = new List<string>();
+
+        var primary = DownloadMirror.MapUrl(item.Url);
+        if (!urls.Contains(primary)) urls.Add(primary);
+
+        foreach (var fallback in item.FallbackUrls)
+        {
+            var mapped = DownloadMirror.MapUrl(fallback);
+            if (!urls.Contains(mapped)) urls.Add(mapped);
+        }
+
+        // 最后一层：镜像失效时仍可直连原始 URL
+        var original = item.Url.Replace("http://", "https://", StringComparison.OrdinalIgnoreCase);
+        if (!urls.Contains(original)) urls.Add(original);
+
+        Exception? last = null;
+        foreach (var url in urls)
+        {
+            try
+            {
+                await _DownloadFromUrlAsync(url, item, ct).ConfigureAwait(false);
+
+                // 校验：没有 Sha1 时用大小判断（若已知）
+                if (await _IsValidAsync(item, ct).ConfigureAwait(false))
+                    return;
+
+                last = new InvalidDataException($"SHA1 校验失败: {Path.GetFileName(item.TargetPath)}");
+                Logger.Warn($"{last.Message}（来源 {url}），将重试");
+                _TryDelete(item.TargetPath);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+            }
+        }
+
+        throw last ?? new IOException($"无法下载 {item.Url}");
+    }
+
+    private async Task _DownloadFromUrlAsync(string url, DownloadItem item, CancellationToken ct)
+    {
+        var dir = Path.GetDirectoryName(item.TargetPath);
+        if (dir is not null) Directory.CreateDirectory(dir);
+
+        // 断点续传：优先从 .part 文件继续
+        var partPath = item.TargetPath + ".part";
+        var existing = File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
+
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        if (existing > 0)
+        {
+            request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(existing, null);
+        }
+
+        using var resp = await Http.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+            .ConfigureAwait(false);
+
+        var remoteLength = resp.Content.Headers.ContentLength ?? -1;
+
+        long startOffset = 0;
+        if (resp.StatusCode == System.Net.HttpStatusCode.PartialContent && existing > 0)
+        {
+            startOffset = existing;
+            Logger.Debug($"断点续传 {Path.GetFileName(item.TargetPath)} 从 {existing} 字节继续");
+        }
+        else if (resp.StatusCode == System.Net.HttpStatusCode.OK)
+        {
+            // 服务器不支持 Range：从头开始
+            if (existing > 0) _TryDelete(partPath);
+            startOffset = 0;
+        }
+        else
+        {
+            resp.EnsureSuccessStatusCode();
+        }
+
+        await _WriteStreamAsync(resp, partPath, startOffset, remoteLength, ct).ConfigureAwait(false);
+
+        // 原子替换 .part -> 目标
+        File.Move(partPath, item.TargetPath, true);
+    }
+
+    private async Task _WriteStreamAsync(HttpResponseMessage resp, string partPath, long startOffset,
+        long remoteLength, CancellationToken ct)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(partPath)!);
+
+        await using var input = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        await using var output = new FileStream(partPath,
+            startOffset > 0 ? FileMode.Append : FileMode.Create,
+            FileAccess.Write, FileShare.None, 64 * 1024, true);
+
+        var buffer = new byte[64 * 1024];
+        long written = startOffset;
+        var lastTick = Environment.TickCount64;
+        long bytesInWindow = 0;
+
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // 暂停时保持文件句柄，等恢复后继续
+            await _WaitIfPausedAsync(ct).ConfigureAwait(false);
+
+            var read = await input.ReadAsync(buffer, ct).ConfigureAwait(false);
+            if (read <= 0) break;
+
+            await output.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+            written += read;
+            Interlocked.Add(ref _downloaded, read);
+            bytesInWindow += read;
+
+            // 限速
+            if (_speedLimitKb > 0)
+            {
+                var elapsed = Environment.TickCount64 - lastTick;
+                if (elapsed > 50 && bytesInWindow > _speedLimitKb * 1024L * elapsed / 1000)
+                {
+                    var expected = bytesInWindow * 1000 / (_speedLimitKb * 1024L);
+                    var wait = expected - elapsed;
+                    if (wait > 0) await Task.Delay((int)wait, ct).ConfigureAwait(false);
+                    lastTick = Environment.TickCount64;
+                    bytesInWindow = 0;
+                }
+            }
+            else if (Environment.TickCount64 - lastTick > 100)
+            {
+                lastTick = Environment.TickCount64;
+                bytesInWindow = 0;
+            }
+        }
+
+        await output.FlushAsync(ct).ConfigureAwait(false);
+        output.Close();
+
+        if (remoteLength > 0 && written != remoteLength && startOffset == 0)
+            throw new IOException($"下载大小不匹配（{written}/{remoteLength} 字节），将重试");
+    }
+
+    private void _RaiseProgress(string? currentFile)
+    {
+        var now = Environment.TickCount64;
+        var elapsed = now - _lastSpeedTick;
+        long speed = 0;
+        if (elapsed >= 500)
+        {
+            speed = (Interlocked.Read(ref _downloaded) - _lastSpeedBytes) * 1000 / Math.Max(1, elapsed);
+            _lastSpeedTick = now;
+            _lastSpeedBytes = Interlocked.Read(ref _downloaded);
+        }
+
+        try
+        {
+            Progress?.Invoke(this, new DownloadProgressEventArgs
+            {
+                TotalBytes = _totalBytes,
+                DownloadedBytes = Interlocked.Read(ref _downloaded),
+                TotalFiles = _totalFiles,
+                CompletedFiles = Interlocked.Read(ref _completedFiles),
+                FailedFiles = Interlocked.Read(ref _failedFiles),
+                SpeedBytesPerSecond = speed,
+                CurrentFile = currentFile
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"进度回调异常: {ex.Message}");
+        }
+    }
+
+    private static void _TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { }
+    }
+
+    /// <summary>把字节数格式化为 "12.3 MB/s" 之类。</summary>
+    public static string FormatSpeed(long bytesPerSecond)
+    {
+        if (bytesPerSecond <= 0) return "—";
+
+        var kb = bytesPerSecond / 1024.0;
+        if (kb < 1024) return $"{kb:F1} KB/s";
+        return $"{kb / 1024:F1} MB/s";
+    }
+}
+

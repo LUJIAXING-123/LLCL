@@ -1,0 +1,30 @@
+# ============================================================
+# LLCL 版本定义（构建系统唯一版本来源）
+# ============================================================
+#
+# 版本号格式: MAJOR.MINOR.PATCH[-STAGE[.N]]
+#
+#   dev      内部测试，不对外分发
+#   beta     内测版，可分享给测试人员，不发布 GitHub
+#   preview  公测版，发布到 GitHub Release
+#   rc       正式版前的最后测试
+#   release  正式版，无后缀
+#
+# 大版本 0 期间只产出 dev / beta，不会产出 preview / rc / release。
+#
+# 字段说明:
+#   major/minor/patch  语义化版本主体
+#   stage              当前阶段（dev|beta|preview|rc|release）
+#   stageNumber        同一阶段内的递增序号（release 阶段忽略）
+# ============================================================
+
+{
+  "major": 0,
+  "minor": 1,
+  "patch": 0,
+  "stage": "dev",
+  "stageNumber": 1,
+  "productName": "LL Craft Launcher",
+  "productShortName": "LLCL",
+  "company": "LL STUDIO"
+}

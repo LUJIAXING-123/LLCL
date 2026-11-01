@@ -1,0 +1,55 @@
+<Project>
+    <!-- ============================================================
+         build/Version.props
+         由 build/version.json 驱动，供所有项目导入。
+         提供 $(LlclVersion)、$(LlclVersionPrefix)、$(LlclStage)、$(LlclIsPublicRelease) 等属性。
+         ============================================================ -->
+    <PropertyGroup>
+        <!-- 便于本地覆盖：dotnet build -p:LlclStage=beta -p:LlclStageNumber=2 -->
+        <LlclVersionFile Condition="'$(LlclVersionFile)' == ''">$(MSBuildThisFileDirectory)version.json</LlclVersionFile>
+    </PropertyGroup>
+
+    <Target Name="LlclReadVersion" BeforeTargets="PrepareForBuild;GetAssemblyIdentity">
+        <PropertyGroup>
+            <_LlclVersionJson>$([System.IO.File]::ReadAllText('$(LlclVersionFile)'))</_LlclVersionJson>
+            <_LlclMajor>$([System.Text.RegularExpressions.Regex]::Match('$(_LlclVersionJson)', '"major"\s*:\s*(\d+)').Groups[1].Value)</_LlclMajor>
+            <_LlclMinor>$([System.Text.RegularExpressions.Regex]::Match('$(_LlclVersionJson)', '"minor"\s*:\s*(\d+)').Groups[1].Value)</_LlclMinor>
+            <_LlclPatch>$([System.Text.RegularExpressions.Regex]::Match('$(_LlclVersionJson)', '"patch"\s*:\s*(\d+)').Groups[1].Value)</_LlclPatch>
+            <_LlclStageFromFile>$([System.Text.RegularExpressions.Regex]::Match('$(_LlclVersionJson)', '"stage"\s*:\s*"([a-z]+)"').Groups[1].Value)</_LlclStageFromFile>
+            <_LlclStageNumFromFile>$([System.Text.RegularExpressions.Regex]::Match('$(_LlclVersionJson)', '"stageNumber"\s*:\s*(\d+)').Groups[1].Value)</_LlclStageNumFromFile>
+
+            <!-- 命令行参数优先级高于 version.json -->
+            <LlclStage Condition="'$(LlclStage)' == ''">$(_LlclStageFromFile)</LlclStage>
+            <LlclStageNumber Condition="'$(LlclStageNumber)' == ''">$(_LlclStageNumFromFile)</LlclStageNumber>
+            <LlclStage Condition="'$(LlclStage)' == ''">dev</LlclStage>
+            <LlclStageNumber Condition="'$(LlclStageNumber)' == ''">1</LlclStageNumber>
+
+            <LlclMajor>$(_LlclMajor)</LlclMajor>
+            <LlclMinor>$(_LlclMinor)</LlclMinor>
+            <LlclPatch>$(_LlclPatch)</LlclPatch>
+
+            <!-- 0.x 不产出 preview / rc / release -->
+            <LlclIsPublicRelease Condition="'$(LlclStage)' == 'release' and '$(LlclMajor)' != '0'">true</LlclIsPublicRelease>
+            <LlclIsPublicRelease Condition="'$(LlclIsPublicRelease)' == ''">false</LlclIsPublicRelease>
+
+            <LlclIsGithubStage Condition="'$(LlclStage)' == 'preview' or '$(LlclStage)' == 'rc' or '$(LlclIsPublicRelease)' == 'true'">true</LlclIsGithubStage>
+            <LlclIsGithubStage Condition="'$(LlclIsGithubStage)' == ''">false</LlclIsGithubStage>
+
+            <!-- 版本字符串 -->
+            <_LlclBaseVersion>$(LlclMajor).$(LlclMinor).$(LlclPatch)</_LlclBaseVersion>
+            <LlclVersionSuffix Condition="'$(LlclStage)' != 'release'">-$(LlclStage).$(LlclStageNumber)</LlclVersionSuffix>
+            <LlclVersion>$(_LlclBaseVersion)$(LlclVersionSuffix)</LlclVersion>
+
+            <!-- 供 AssemblyVersion 使用：去掉预发布后缀，第四段固定为 0 -->
+            <_LlclAssemblyVersion>$(LlclMajor).$(LlclMinor).$(LlclPatch).0</_LlclAssemblyVersion>
+
+            <!-- MSIX 要求 Package Version 必须是四段数字，预发布用 stageNumber 编码到第四段 -->
+            <_LlclMsixVersion>$(LlclMajor).$(LlclMinor).$(LlclPatch).$(LlclStageNumber)</_LlclMsixVersion>
+
+            <!-- 显示用名称，如 "0.1.0-dev.1" -->
+            <LlclDisplayVersion>$(LlclVersion)</LlclDisplayVersion>
+        </PropertyGroup>
+
+        <Message Importance="high" Text="LLCL 版本: $(LlclVersion)  (stage=$(LlclStage), 可发布GitHub=$(LlclIsGithubStage))" />
+    </Target>
+</Project>

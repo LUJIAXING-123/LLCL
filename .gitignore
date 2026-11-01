@@ -1,0 +1,67 @@
+# ============================================================
+#  LLCL .gitignore
+# ============================================================
+
+# ---- 构建输出 ----
+[Bb]in/
+[Oo]bj/
+[Dd]ist/
+[Pp]ublish/
+*.user
+*.suo
+*.pdb
+*.ppdb
+.vs/
+.vscode/
+*.csproj.user
+
+# ---- 打包产物 ----
+*.msix
+*.msixbundle
+*.msixupload
+*.appx
+*.appxbundle
+*.nupkg
+*.snupkg
+AppPackages/
+BundleArtifacts/
+
+# ---- 本地运行数据（游戏与启动器数据都不入库）----
+.minecraft/
+LLCL/
+**/.minecraft/
+**/LLCL/
+Cache/
+Logs/
+Runtime/
+Tools/
+
+# ---- 证书与签名（绝不入库）----
+*.pfx
+*.cer
+*.pvk
+*.spc
+*.key
+!*Test*.cer
+
+# ---- 临时文件 ----
+*.tmp
+*.bak
+*.log
+*.zip
+*.7z
+*.rar
+Thumbs.db
+Desktop.ini
+
+# ---- 旧版源码归档（仅作移植参考，不参与构建）----
+/pclce/
+
+# ---- 工具与测试产物 ----
+tools/**/bin/
+tools/**/obj/
+
+# ---- 其他 ----
+.idea/
+*.DotSettings.user
+*.editorconfig.bak

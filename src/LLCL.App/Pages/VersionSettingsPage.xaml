@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="LLCL.Pages.VersionSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="Transparent">
+
+    <Grid Padding="{StaticResource PagePadding}" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Button x:Name="BackButton" Content="返回" Click="Back_Click" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                <TextBlock x:Name="TitleText" Style="{StaticResource SectionHeaderTextStyle}" />
+                <TextBlock x:Name="SubtitleText" Style="{StaticResource SubHeaderTextStyle}" />
+            </StackPanel>
+            <Button Grid.Column="2" Content="启动此版本" Style="{StaticResource AccentButtonStyle}"
+                    Click="Launch_Click" VerticalAlignment="Center" />
+        </Grid>
+
+        <NavigationView Grid.Row="1"
+                        x:Name="SettingsNav"
+                        PaneDisplayMode="Left"
+                        IsSettingsVisible="False"
+                        IsBackButtonVisible="Collapsed"
+                        IsPaneToggleButtonVisible="False"
+                        OpenPaneLength="180"
+                        SelectionChanged="SettingsNav_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="概览" Tag="overview" />
+                <NavigationViewItem Content="启动设置" Tag="launch" />
+                <NavigationViewItem Content="游戏设置" Tag="game" />
+                <NavigationViewItem Content="mods 管理" Tag="mods" />
+                <NavigationViewItem Content="其他" Tag="other" />
+            </NavigationView.MenuItems>
+            <Frame x:Name="SettingsFrame" />
+        </NavigationView>
+    </Grid>
+</Page>

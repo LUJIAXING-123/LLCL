@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="LLCL.Pages.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="Transparent">
+
+    <Grid Padding="{StaticResource PagePadding}" RowSpacing="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid ColumnSpacing="16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock x:Name="GreetingText" Style="{StaticResource SectionHeaderTextStyle}" />
+                <TextBlock x:Name="SubGreetingText" Style="{StaticResource SubHeaderTextStyle}" />
+            </StackPanel>
+            <Button Grid.Column="1" x:Name="AccountButton" VerticalAlignment="Center"
+                    Click="AccountButton_Click" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="16">
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="16">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="启动游戏" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock x:Name="CurrentVersionText" Style="{StaticResource SubHeaderTextStyle}" />
+                            </StackPanel>
+                            <Button Grid.Column="1" x:Name="LaunchButton" Content="启动"
+                                    Style="{StaticResource AccentButtonStyle}" Click="LaunchButton_Click" />
+                        </Grid>
+                        <ProgressBar x:Name="LaunchProgress" IsIndeterminate="True" Value="0"
+                                     Visibility="Collapsed" Height="4" />
+                        <ComboBox x:Name="VersionComboBox" HorizontalAlignment="Stretch"
+                                  Header="游戏版本" SelectionChanged="VersionComboBox_SelectionChanged" />
+                    </StackPanel>
+                </Border>
+
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="已安装版本" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock x:Name="VersionCountText" Style="{StaticResource SubHeaderTextStyle}" />
+                            <StackPanel Orientation="Horizontal" Spacing="16">
+                                <HyperlinkButton Content="前往下载中心" Click="GoDownload_Click" Padding="0" />
+                                <HyperlinkButton Content="管理此版本" Click="ManageVersion_Click" Padding="0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Style="{StaticResource CardStyle}">
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="联机状态" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock x:Name="LinkStateText" Style="{StaticResource SubHeaderTextStyle}" />
+                            <HyperlinkButton Content="打开联机页" Click="GoLink_Click" Padding="0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

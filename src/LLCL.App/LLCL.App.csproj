@@ -1,0 +1,96 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <_LlclRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))</_LlclRepoRoot>
+    </PropertyGroup>
+    <Import Project="$(_LlclRepoRoot)build\Version.props" />
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+        <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+        <RootNamespace>LLCL</RootNamespace>
+        <AssemblyName>LLCL</AssemblyName>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+        <Platforms>x64;ARM64</Platforms>
+        <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+        <UseWinUI>true</UseWinUI>
+        <EnableMsixTooling>true</EnableMsixTooling>
+        <Nullable>enable</Nullable>
+        <LangVersion>14</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+
+        <!-- 打包方式：MSIX 安装包 -->
+        <WindowsPackageType>MSIX</WindowsPackageType>
+        <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
+        <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
+
+        <!-- 自包含：目标机器无需安装 .NET 或 Windows App SDK 运行时 -->
+        <SelfContained>true</SelfContained>
+        <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+        <PublishSingleFile>false</PublishSingleFile>
+
+        <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
+
+        <!-- 剔除用不到的 Windows App SDK 组件 -->
+        <WindowsAppSDKDisableMLComponent>true</WindowsAppSDKDisableMLComponent>
+        <WindowsAppSDKDisableAIComponent>true</WindowsAppSDKDisableAIComponent>
+        <WindowsAppSDKDisableWidgetsComponent>true</WindowsAppSDKDisableWidgetsComponent>
+
+        <AssemblyTitle>LL Craft Launcher</AssemblyTitle>
+        <Product>LL Craft Launcher</Product>
+        <Company>LL STUDIO</Company>
+        <Description>Minecraft 启动器</Description>
+        <Copyright>Copyright © LL STUDIO</Copyright>
+        <ApplicationIcon>Assets\llcl.ico</ApplicationIcon>
+        <EnableDefaultItems>true</EnableDefaultItems>
+
+        <AppxManifest>Package.appxmanifest</AppxManifest>
+        <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
+    </PropertyGroup>
+
+    <!-- 版本号由 build/version.json 驱动 -->
+    <Target Name="LlclApplyVersion" BeforeTargets="PrepareForBuild;GenerateAssemblyInfo" DependsOnTargets="LlclReadVersion">
+        <PropertyGroup>
+            <Version>$(LlclVersion)</Version>
+            <AssemblyVersion>$(_LlclAssemblyVersion)</AssemblyVersion>
+            <FileVersion>$(_LlclAssemblyVersion)</FileVersion>
+            <InformationalVersion>$(LlclVersion)</InformationalVersion>
+            <AppxPackageVersion>$(_LlclMsixVersion)</AppxPackageVersion>
+        </PropertyGroup>
+    </Target>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+        <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
+        <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+        <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3719.77" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Manifest Include="$(ApplicationManifest)" />
+        <Content Include="Package.appxmanifest" />
+        <Content Include="PackageAssets\**\*.png" />
+        <Content Include="Assets\**\*.png" />
+        <Content Include="Assets\llcl.ico" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\LLCL.Core\LLCL.Core.csproj" />
+    </ItemGroup>
+
+    <!-- 发布后剔除 ML / AI 相关的大体积原生库 -->
+    <Target Name="TrimUnusedNativeLibraries" AfterTargets="Publish">
+        <ItemGroup>
+            <_UnusedDll Include="$(PublishDir)onnxruntime.dll" />
+            <_UnusedDll Include="$(PublishDir)DirectML.dll" />
+            <_UnusedDll Include="$(PublishDir)Microsoft.Asg.SemanticIndex.AiFabric.Compatibility.dll" />
+            <_UnusedDll Include="$(PublishDir)Microsoft.Windows.AI*.dll" />
+            <_UnusedDll Include="$(PublishDir)Microsoft.Windows.ML*.dll" />
+            <_UnusedDll Include="$(PublishDir)Microsoft.Windows.Widgets*.dll" />
+        </ItemGroup>
+        <Delete Files="@(_UnusedDll)" ContinueOnError="true" />
+    </Target>
+
+    <Import Project="$(_LlclRepoRoot)build\Version.targets" />
+</Project>
+
