@@ -180,6 +180,50 @@ public sealed partial class SettingsPage : Page
         panel.Children.Add(loading);
 
         _ = LoadJavaAsync(javaList, loading);
+
+        // ---------- 版本隔离 ----------
+        panel.Children.Add(Header("版本隔离"));
+        panel.Children.Add(Hint(
+            "与 PCL 的「版本隔离」一致：隔离后每个版本使用各自的 mods 与存档目录。\n" +
+            "单个版本可在其版本设置中单独覆盖。"));
+
+        var isolationCombo = new ComboBox
+        {
+            Header = "默认隔离方案",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        isolationCombo.Items.Add("关闭：所有版本共享 .minecraft 根目录");
+        isolationCombo.Items.Add("仅隔离可安装 Mod 的版本");
+        isolationCombo.Items.Add("仅隔离非正式版（快照 / 远古版本）");
+        isolationCombo.Items.Add("隔离非正式版与可安装 Mod 的版本");
+        isolationCombo.Items.Add("隔离所有版本");
+
+        isolationCombo.SelectedIndex = Math.Clamp((int)config.VersionIsolationMode, 0, 4);
+        isolationCombo.SelectionChanged += (_, _) =>
+        {
+            config.VersionIsolationMode = (VersionIsolationMode)Math.Max(0, isolationCombo.SelectedIndex);
+            Save();
+        };
+        panel.Children.Add(isolationCombo);
+
+        var openVersions = new Button { Content = "打开版本目录", Margin = new Thickness(0, 4, 0, 0) };
+        openVersions.Click += (_, _) =>
+        {
+            try
+            {
+                Directory.CreateDirectory(Paths.VersionsDir);
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = Paths.VersionsDir,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"打开版本目录失败: {ex.Message}");
+            }
+        };
+        panel.Children.Add(openVersions);
     }
 
     private static async Task LoadJavaAsync(ListView list, TextBlock loading)

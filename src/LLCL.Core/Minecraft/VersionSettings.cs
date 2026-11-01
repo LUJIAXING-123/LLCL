@@ -42,14 +42,27 @@ public sealed class VersionSettings
     public string? Comment { get; set; }
 
     /// <summary>
-    /// 版本隔离（与 PCL 的“版本隔离”一致）：
-    /// false = 使用 .minecraft 根目录，各版本共享 mods / saves / 配置；
-    /// true = 使用 versions/&lt;id&gt; 作为独立运行目录。
+    /// 版本隔离的手动指定，与 PCL 的三态语义一致：
+    /// <c>null</c> = 跟随判定规则（自动检测 + 全局方案）；
+    /// <c>true</c> = 强制开启；<c>false</c> = 强制关闭。
     /// </summary>
-    public bool IsolateVersion { get; set; }
+    public bool? IsolationOverride { get; set; }
+
+    /// <summary>
+    /// 兼容旧配置：早期版本使用非空的 <see cref="IsolateVersion"/>。
+    /// 读取时若发现旧字段已设置，则迁移为 <see cref="IsolationOverride"/>。
+    /// </summary>
+    public bool? IsolateVersion
+    {
+        get => IsolationOverride;
+        set => IsolationOverride = value;
+    }
+
+    /// <summary>该版本是否启用隔离（按完整规则判定）。</summary>
+    public IsolationDecision GetIsolation(string versionId) => VersionIsolation.Resolve(versionId);
 
     /// <summary>该版本实际的游戏运行目录。</summary>
-    public string GetGameDir(string versionId) => GameLauncher.GetGameDir(versionId, IsolateVersion);
+    public string GetGameDir(string versionId) => VersionIsolation.GetGameDir(versionId);
 
     [JsonIgnore] public string FilePath { get; set; } = string.Empty;
 

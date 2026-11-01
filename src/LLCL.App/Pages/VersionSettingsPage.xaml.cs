@@ -94,6 +94,76 @@ public sealed partial class VersionSettingsPage : Page
 
     private void Save() => _settings.Save();
 
+    /// <summary>
+    /// 版本隔离的三态选择器：跟随规则 / 强制开启 / 强制关闭。
+    /// 与 PCL 的语义一致，并展示当前判定来源。
+    /// </summary>
+    private ComboBox MakeIsolationSelector()
+    {
+        var combo = new ComboBox
+        {
+            Header = "隔离方式",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        combo.Items.Add("跟随规则（自动检测 + 全局方案）");
+        combo.Items.Add("强制开启隔离");
+        combo.Items.Add("强制关闭隔离");
+
+        combo.SelectedIndex = _settings.IsolationOverride switch
+        {
+            true => 1,
+            false => 2,
+            _ => 0
+        };
+
+        var decision = VersionIsolation.Resolve(_versionId);
+        var status = new TextBlock
+        {
+            Text = $"当前实际：{(decision.Isolated ? "已隔离" : "共享 .minecraft 根目录")}" +
+                   $"（{decision.ReasonText}）\n目录：{VersionIsolation.GetGameDir(_versionId)}",
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+                "TextFillColorSecondaryBrush"]
+        };
+
+        combo.SelectionChanged += async (_, _) =>
+        {
+            var wasIsolated = VersionIsolation.IsIsolated(_versionId);
+
+            _settings.IsolationOverride = combo.SelectedIndex switch
+            {
+                1 => true,
+                2 => false,
+                _ => null
+            };
+            Save();
+
+            var nowIsolated = VersionIsolation.IsIsolated(_versionId);
+
+            // 隔离状态真正改变时，迁移已有内容，避免用户的 mods / 存档"消失"
+            if (wasIsolated != nowIsolated)
+            {
+                var moved = VersionIsolation.MigrateContent(_versionId, nowIsolated);
+                if (moved > 0)
+                {
+                    await ShowAsync("已迁移版本数据",
+                        $"已将 {moved} 个文件/目录" +
+                        (nowIsolated ? "复制到版本隔离目录。" : "复制回 .minecraft 根目录。") +
+                        "\n\n原位置的文件仍然保留，确认无误后可手动删除。");
+                }
+            }
+
+            // 刷新整页，让目录列表与实际路径同步
+            Show("game");
+        };
+
+        _isolationStatus = status;
+        return combo;
+    }
+
+    private TextBlock? _isolationStatus;
     private ToggleSwitch MakeToggle(string header, bool value, Action<bool> apply)
     {
         var toggle = new ToggleSwitch { Header = header, IsOn = value };
@@ -256,13 +326,10 @@ public sealed partial class VersionSettingsPage : Page
         panel.Children.Add(Header("版本隔离"));
         panel.Children.Add(Hint(
             "与 PCL 的版本隔离等价：关闭时使用 .minecraft 根目录，各版本共享 mods 与存档；" +
-            "开启后该版本使用 versions/<id> 作为独立运行目录。"));
-        panel.Children.Add(MakeToggle("为此版本启用隔离目录", _settings.IsolateVersion,
-            v =>
-            {
-                _settings.IsolateVersion = v;
-                Show("mods");
-            }));
+            "开启后该版本使用 versions/<id> 作为独立运行目录。\n" +
+            "留空（跟随规则）时：版本目录下已有 mods 或存档会自动开启，否则按全局方案判定。"));
+        panel.Children.Add(MakeIsolationSelector());
+        if (_isolationStatus is not null) panel.Children.Add(_isolationStatus);
 
         panel.Children.Add(Header("目录"));
         var dirs = new StackPanel { Spacing = 6 };
@@ -300,9 +367,9 @@ public sealed partial class VersionSettingsPage : Page
         var modsDir = Path.Combine(_settings.GetGameDir(_versionId), "mods");
         Directory.CreateDirectory(modsDir);
 
-        panel.Children.Add(Hint(_settings.IsolateVersion
-            ? $"当前为版本隔离模式，mod 目录：{modsDir}"
-            : $"当前为共享模式（与 PCL 相同），mod 目录：{modsDir}"));
+        var decision = VersionIsolation.Resolve(_versionId);
+        panel.Children.Add(Hint(
+            $"当前为{(decision.Isolated ? "版本隔离" : "共享")}模式（{decision.ReasonText}），mod 目录：{modsDir}"));
 
         panel.Children.Add(Header("已安装的 mod"));
         var files = Directory.GetFiles(modsDir, "*.jar")
@@ -480,6 +547,11 @@ public sealed partial class VersionSettingsPage : Page
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 }
+
+
+
+
+
 
 
 

@@ -4,6 +4,28 @@ using System.Text.Json.Serialization;
 
 namespace LLCL.Core;
 
+/// <summary>
+/// 版本隔离的全局默认方案，语义对齐 PCL。
+/// </summary>
+public enum VersionIsolationMode
+{
+    /// <summary>关闭隔离，所有版本共用 .minecraft 根目录。</summary>
+    Off = 0,
+
+    /// <summary>仅隔离可安装 Mod 的版本（Forge / NeoForge / Fabric / Quilt 等）。</summary>
+    ModdableOnly = 1,
+
+    /// <summary>仅隔离非正式版（快照、远古版本）。</summary>
+    NonReleaseOnly = 2,
+
+    /// <summary>隔离非正式版与可安装 Mod 的版本。</summary>
+    ModdableOrNonRelease = 3,
+
+    /// <summary>隔离所有版本（默认）。</summary>
+    All = 4
+}
+
+
 public enum DownloadSource
 {
     /// <summary>自动选择（默认官方源，失败时自动回退镜像）。</summary>
@@ -51,6 +73,12 @@ public sealed class LauncherConfig
     public int WindowHeight { get; set; } = 480;
     /// <summary>实例在启动时是否自动更新已损坏的原版文件。</summary>
     public bool AutoRepairFiles { get; set; } = true;
+
+    /// <summary>
+    /// 版本隔离的全局默认方案，对齐 PCL 的「版本隔离」设置项。
+    /// 单个版本可在版本设置中手动覆盖。
+    /// </summary>
+    public VersionIsolationMode VersionIsolationMode { get; set; } = VersionIsolationMode.All;
 
     // ---------- 下载 ----------
     public DownloadSource Source { get; set; } = DownloadSource.Auto;
@@ -153,5 +181,6 @@ public sealed class LauncherConfig
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 }
+
 
 

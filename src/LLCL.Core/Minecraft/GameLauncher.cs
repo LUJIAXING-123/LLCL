@@ -159,10 +159,13 @@ public sealed class GameLauncher
     }
 
     /// <summary>
-    /// 版本的游戏运行目录。与 PCL 一致：默认使用 .minecraft 根目录（各版本共享 mods / 存档），
-    /// 也可在版本设置中开启隔离，改用 versions/&lt;id&gt;。
+    /// 版本的游戏运行目录。判定逻辑见 <see cref="VersionIsolation" />：
+    /// 手动设置优先 → 已有 mods/saves 自动开启 → 全局方案。
     /// </summary>
-    public static string GetGameDir(string versionId, bool isolated = false)
+    public static string GetGameDir(string versionId) => VersionIsolation.GetGameDir(versionId);
+
+    /// <summary>显式指定是否隔离（供需要绕过判定的调用点使用）。</summary>
+    public static string GetGameDir(string versionId, bool isolated)
         => isolated
             ? Path.Combine(Paths.VersionsDir, versionId)
             : Paths.MinecraftDir;
