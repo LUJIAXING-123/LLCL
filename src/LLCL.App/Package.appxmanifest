@@ -3,14 +3,13 @@
     xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
     xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-    xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
-    IgnorableNamespaces="uap rescap desktop6">
+    IgnorableNamespaces="uap rescap">
 
     <!-- 版本号由 build/version.json 在打包时替换 -->
     <Identity
         Name="LLSTUDIO.LLCraftLauncher"
         Publisher="CN=LL STUDIO"
-        Version="0.1.0.1"
+        Version="0.1.0.0"
         ProcessorArchitecture="x64" />
 
     <Properties>
@@ -44,10 +43,6 @@
                     Square310x310Logo="PackageAssets\Square310x310Logo.png" />
                 <uap:SplashScreen Image="PackageAssets\SplashScreen.png" />
             </uap:VisualElements>
-            <Extensions>
-                <!-- 允许以普通 Win32 方式运行（非 UWP 沙箱） -->
-                <desktop6:Extension Category="windows.fullTrustProcess" Executable="LLCL.exe" />
-            </Extensions>
         </Application>
     </Applications>
 
@@ -57,3 +52,5 @@
         <Capability Name="privateNetworkClientServer" />
     </Capabilities>
 </Package>
+
+

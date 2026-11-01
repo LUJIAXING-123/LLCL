@@ -20,9 +20,8 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
-                <!-- 左侧图标 -->
-                <Image Source="ms-appx:///Assets/llcl.png"
-                       Width="140" Height="140" Stretch="Uniform"
+                <!-- 左侧图标（由代码加载，兼容打包与绿色模式） -->
+                <Image x:Name="LogoSide" Width="140" Height="140" Stretch="Uniform"
                        VerticalAlignment="Center" />
 
                 <!-- 右侧文字 -->

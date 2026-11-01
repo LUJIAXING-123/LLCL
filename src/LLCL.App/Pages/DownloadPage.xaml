@@ -182,6 +182,8 @@
                                 Style="{StaticResource AccentButtonStyle}" Click="Install_Click"
                                 IsEnabled="False" />
                         <Button x:Name="DetailButton" Content="版本设置" Click="Detail_Click" IsEnabled="False" />
+                        <Button x:Name="PauseButton" Content="暂停" Click="Pause_Click"
+                                Visibility="Collapsed" />
                         <Button x:Name="CancelButton" Content="取消" Click="Cancel_Click"
                                 Visibility="Collapsed" />
                         <Button x:Name="OpenFolderButton" Content="打开目录" Click="OpenFolder_Click" />
@@ -195,3 +197,4 @@
         </Border>
     </Grid>
 </Page>
+

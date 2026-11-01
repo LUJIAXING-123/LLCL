@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using LLCL.Core;
 using LLCL.Core.Minecraft;
+using LLCL.Core.Net;
 using LLCL.Core.Resources;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -259,6 +260,8 @@ public sealed partial class DownloadPage : Page
         _busy = true;
         InstallLoaderButton.IsEnabled = false;
         CancelButton.Visibility = Visibility.Visible;
+        PauseButton.Visibility = Visibility.Visible;
+        PauseButton.Content = "暂停";
         DownloadProgress.Visibility = Visibility.Visible;
         DownloadProgress.Value = 0;
         _cts = new CancellationTokenSource();
@@ -271,15 +274,21 @@ public sealed partial class DownloadPage : Page
 
         try
         {
-            // 确保原版基础版本存在
-            if (!Directory.Exists(Path.Combine(Paths.VersionsDir, mc)))
-            {
-                ProgressText.Text = "正在下载原版游戏…";
-                await VanillaInstaller.InstallAsync(mc, Paths.VersionsDir, progress, _cts.Token);
-            }
+            string newId = string.Empty;
+            await DownloadQueue.RunAsync($"安装 {CurrentLoaderName()} {loaderVersion}",
+                DownloadTaskKind.Loader,
+                async (_, token) =>
+                {
+                    // 确保原版基础版本存在
+                    if (!Directory.Exists(Path.Combine(Paths.VersionsDir, mc)))
+                    {
+                        ProgressText.Text = "正在下载原版游戏…";
+                        await VanillaInstaller.InstallAsync(mc, Paths.VersionsDir, progress, token);
+                    }
 
-            var newId = await LoaderInstaller.InstallAsync(CurrentLoaderKind(), mc, loaderVersion,
-                progress, _cts.Token);
+                    newId = await LoaderInstaller.InstallAsync(CurrentLoaderKind(), mc, loaderVersion,
+                        progress, token);
+                }, _cts.Token);
 
             ProgressText.Text = $"✓ {newId} 安装完成";
             SelectedText.Text = $"已安装 {newId}";
@@ -302,6 +311,7 @@ public sealed partial class DownloadPage : Page
             _busy = false;
             InstallLoaderButton.IsEnabled = true;
             CancelButton.Visibility = Visibility.Collapsed;
+            PauseButton.Visibility = Visibility.Collapsed;
             DownloadProgress.Visibility = Visibility.Collapsed;
             _cts?.Dispose();
             _cts = null;
@@ -434,6 +444,8 @@ public sealed partial class DownloadPage : Page
         _busy = true;
         InstallButton.IsEnabled = false;
         CancelButton.Visibility = Visibility.Visible;
+        PauseButton.Visibility = Visibility.Visible;
+        PauseButton.Content = "暂停";
         DownloadProgress.Visibility = Visibility.Visible;
         DownloadProgress.Value = 0;
         _cts = new CancellationTokenSource();
@@ -446,7 +458,12 @@ public sealed partial class DownloadPage : Page
 
         try
         {
-            await VanillaInstaller.InstallAsync(_selectedVersion!, Paths.VersionsDir, progress, _cts.Token);
+            // 通过队列执行，以便支持暂停 / 继续
+            await DownloadQueue.RunAsync($"安装 {_selectedVersion}", DownloadTaskKind.Vanilla,
+                async (downloader, token) =>
+                {
+                    await VanillaInstaller.InstallAsync(_selectedVersion!, Paths.VersionsDir, progress, token);
+                }, _cts.Token);
 
             LauncherConfig.Current.LastInstance = _selectedVersion;
             LauncherConfig.Current.Save();
@@ -469,6 +486,7 @@ public sealed partial class DownloadPage : Page
             _busy = false;
             InstallButton.IsEnabled = true;
             CancelButton.Visibility = Visibility.Collapsed;
+            PauseButton.Visibility = Visibility.Collapsed;
             DownloadProgress.Visibility = Visibility.Collapsed;
             _cts?.Dispose();
             _cts = null;
@@ -530,7 +548,11 @@ public sealed partial class DownloadPage : Page
 
             var file = _resourceFiles[0];
             var type = _selectedResource.Type;
-            await ResourceService.DownloadToVersionAsync(file, targetVersion, type, progress);
+            await DownloadQueue.RunAsync($"下载 {file.FileName}", DownloadTaskKind.Resource,
+                async (_, token) =>
+                {
+                    await ResourceService.DownloadToVersionAsync(file, targetVersion, type, progress, token);
+                });
 
             ProgressText.Text = $"✓ 已下载 {file.FileName} 到 {targetVersion}";
         }
@@ -566,6 +588,26 @@ public sealed partial class DownloadPage : Page
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => _cts?.Cancel();
 
+    /// <summary>暂停 / 继续当前下载任务。</summary>
+    private void Pause_Click(object sender, RoutedEventArgs e)
+    {
+        var task = DownloadQueue.Tasks.FirstOrDefault(t => t.State is DownloadState.Running or DownloadState.Paused);
+        if (task is null) return;
+
+        if (task.State == DownloadState.Paused)
+        {
+            DownloadQueue.Resume(task.Id);
+            PauseButton.Content = "暂停";
+            ProgressText.Text = "已继续下载";
+        }
+        else
+        {
+            DownloadQueue.Pause(task.Id);
+            PauseButton.Content = "继续";
+            ProgressText.Text = "已暂停下载，点击“继续”恢复";
+        }
+    }
+
     private void SourceSettings_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("settings");
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
@@ -595,6 +637,11 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
+
+
+
+
 
 
 
