@@ -387,6 +387,8 @@ public sealed partial class DownloadPage : Page
 
         BeginBusy();
         var progress = MakeProgress();
+        var cts = _cts;
+        if (cts is null) { EndBusy(); return; }
 
         try
         {
@@ -402,7 +404,7 @@ public sealed partial class DownloadPage : Page
 
                     newId = await LoaderInstaller.InstallAsync(CurrentLoaderKind(), mc, loaderVersion,
                         progress, token);
-                }, _cts!.Token, mc);
+                }, cts.Token, mc);
 
             ProgressText.Text = $"✓ {newId} 安装完成";
             SelectedText.Text = $"已安装 {newId}";
@@ -549,6 +551,8 @@ public sealed partial class DownloadPage : Page
     {
         BeginBusy();
         var progress = MakeProgress();
+        var cts = _cts;
+        if (cts is null) { EndBusy(); return; }
 
         try
         {
@@ -556,7 +560,7 @@ public sealed partial class DownloadPage : Page
                 async (_, token) =>
                 {
                     await VanillaInstaller.InstallAsync(_selectedVersion!, Paths.VersionsDir, progress, token);
-                }, _cts!.Token, _selectedVersion);
+                }, cts.Token, _selectedVersion);
 
             LauncherConfig.Current.LastInstance = _selectedVersion;
             LauncherConfig.Current.Save();
@@ -616,6 +620,8 @@ public sealed partial class DownloadPage : Page
 
         BeginBusy();
         var progress = MakeProgress();
+        var cts = _cts;
+        if (cts is null) { EndBusy(); return; }
 
         try
         {
@@ -666,6 +672,13 @@ public sealed partial class DownloadPage : Page
 
     private void OnQueueProgress(DownloadTask task) => Dispatch(() =>
     {
+        // 首个任务真正进入队列后再切到「下载任务」页
+        if (_pendingSwitchToTasks)
+        {
+            _pendingSwitchToTasks = false;
+            SelectSection("tasks");
+        }
+
         var card = _tasks.FirstOrDefault(t => t.Id == task.Id);
 
         if (card is null)
@@ -728,10 +741,13 @@ public sealed partial class DownloadPage : Page
         var active = DownloadQueue.Tasks.FirstOrDefault(t =>
             t.State is DownloadState.Running or DownloadState.Paused);
 
+        // 队列里暂时没有运行中的任务，但界面刚发起下载（RunAsync 还没入队）：
+        // 此时绝不能调用 EndBusy()，否则会把 BeginBusy 刚创建的 _cts 置空，
+        // 导致后续 _cts!.Token 抛出 NullReferenceException。
         if (active is null)
         {
-            // 没有进行中的任务：收尾界面状态
-            EndBusy();
+            if (!_busy) return;
+            // 仍处于忙碌状态：保持进度条可见，等任务真正入队后再由进度回调接管
             return;
         }
 
@@ -802,9 +818,15 @@ public sealed partial class DownloadPage : Page
         DownloadProgress.Value = 0;
         _cts = new CancellationTokenSource();
 
-        // 下载一开始就切到「下载任务」页，用户能立刻看到进度与取消入口
-        SelectSection("tasks");
+        // 注意：这里不能立刻切到「下载任务」页。
+        // SelectSection 会触发 ApplySection → RefreshTasks → SyncActiveProgress，
+        // 而此时 RunAsync 尚未入队，早期版本会因此在 EndBusy 中把 _cts 置空。
+        // 切换动作改由 OnQueueProgress 在首个任务真正入队后执行。
+        _pendingSwitchToTasks = true;
     }
+
+    /// <summary>首个任务入队后自动切到「下载任务」页（只切一次）。</summary>
+    private bool _pendingSwitchToTasks;
 
     private void EndBusy()
     {
@@ -930,6 +952,7 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
 
 
 
