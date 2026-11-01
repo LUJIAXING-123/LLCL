@@ -178,6 +178,8 @@ public sealed class FileDownloader
         }
         catch (OperationCanceledException)
         {
+            // 取消时彻底清理：删除所有未完成的 .part 临时文件，避免磁盘残留
+            CleanupRemaining(items);
             State = DownloadState.Canceled;
             throw;
         }
@@ -461,6 +463,33 @@ public sealed class FileDownloader
         }
     }
 
+    /// <summary>
+    /// 取消后清理：删除该批次所有未完成的临时文件（.part），
+    /// 避免用户取消后磁盘上留下半截文件。
+    /// </summary>
+    private static void CleanupRemaining(IReadOnlyList<DownloadItem> items)
+    {
+        foreach (var item in items)
+        {
+            try
+            {
+                var part = item.TargetPath + ".part";
+                if (File.Exists(part)) File.Delete(part);
+
+                // 目标文件若大小不符（半截写入），一并删除，保证下次是干净重下
+                if (item.Size > 0 && File.Exists(item.TargetPath) &&
+                    new FileInfo(item.TargetPath).Length != item.Size)
+                    File.Delete(item.TargetPath);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"清理临时文件失败 {item.TargetPath}: {ex.Message}");
+            }
+        }
+
+        Logger.Info("已清理取消的下载临时文件");
+    }
+
     private static void _TryDelete(string path)
     {
         try { File.Delete(path); } catch { }
@@ -476,4 +505,5 @@ public sealed class FileDownloader
         return $"{kb / 1024:F1} MB/s";
     }
 }
+
 

@@ -22,7 +22,7 @@ public sealed partial class HomePage : Page
     {
         var config = LauncherConfig.Current;
         GreetingText.Text = $"你好，{config.DisplayAccountName}";
-        SubGreetingText.Text = $"{DateTime.Now:yyyy年M月d日} · LLCL 3.0";
+        SubGreetingText.Text = $"{DateTime.Now:yyyy年M月d日} · {LauncherInfo.ProductShortName} {LauncherInfo.Version}";
         AccountButton.Content = config.AccountType == "microsoft"
             ? config.MicrosoftUserName ?? "微软账号"
             : $"离线 · {config.OfflineUserName}";
@@ -151,5 +151,6 @@ public sealed partial class HomePage : Page
         MainWindow.Instance?.ShowVersionSettings(version);
     }
 }
+
 
 

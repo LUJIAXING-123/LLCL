@@ -50,4 +50,12 @@ public sealed class LanItem
     public int Port { get; init; }
 }
 
+public sealed class TaskCard
+{
+    public string Id { get; init; } = string.Empty;
+    public string Title { get; init; } = string.Empty;
+    public string Detail { get; set; } = string.Empty;
+    public string State { get; set; } = string.Empty;
+    public double Ratio { get; set; }
+}
 

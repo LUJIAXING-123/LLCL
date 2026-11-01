@@ -21,8 +21,15 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- 左侧图标（由代码加载，兼容打包与绿色模式） -->
-                <Image x:Name="LogoSide" Width="140" Height="140" Stretch="Uniform"
-                       VerticalAlignment="Center" />
+                <Grid Width="140" Height="140" VerticalAlignment="Center">
+                    <Image x:Name="LogoSide" Stretch="Uniform" />
+                    <Border x:Name="LogoFallback" Visibility="Collapsed"
+                            CornerRadius="12" Background="{ThemeResource SystemFillColorNeutralBackgroundBrush}">
+                        <TextBlock Text="LLCL" FontSize="32" FontWeight="Bold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </Border>
+                </Grid>
 
                 <!-- 右侧文字 -->
                 <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="6">

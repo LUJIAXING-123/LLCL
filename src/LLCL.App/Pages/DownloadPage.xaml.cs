@@ -6,20 +6,25 @@ using LLCL.Core.Net;
 using LLCL.Core.Resources;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
 
 namespace LLCL.Pages;
 
-/// <summary>下载中心：原版版本、模组加载器、社区资源。</summary>
+/// <summary>
+/// 下载中心：左侧统一分类导航（原版 / 加载器 / 模组 / 整合包 / 资源包 / 光影 / 任务），
+/// 右侧为对应内容，底部为操作区。
+/// </summary>
 public sealed partial class DownloadPage : Page
 {
     private readonly ObservableCollection<VersionItem> _versions = new();
     private readonly ObservableCollection<ResourceCard> _resources = new();
+    private readonly ObservableCollection<TaskCard> _tasks = new();
+
     private VersionManifest? _manifest;
     private CancellationTokenSource? _cts;
     private bool _busy;
+    private bool _loaded;
 
-    private string _kind = "vanilla";
+    private string _section = "vanilla";
     private string? _selectedVersion;
     private ResourceHit? _selectedResource;
     private List<ResourceFile> _resourceFiles = [];
@@ -29,21 +34,22 @@ public sealed partial class DownloadPage : Page
         InitializeComponent();
         VersionList.ItemsSource = _versions;
         ResourceList.ItemsSource = _resources;
+        TaskList.ItemsSource = _tasks;
 
         ResourceSourceCombo.Items.Add("Modrinth");
         ResourceSourceCombo.Items.Add("CurseForge");
 
-        // 注意：XAML 中的 Checked/SelectionChanged 可能在 InitializeComponent 期间
-        // 就已触发（此时部分控件尚未赋值），因此初始加载统一放到 Loaded 之后。
+        DownloadQueue.Changed += OnQueueChanged;
+        DownloadQueue.ProgressUpdated += OnQueueProgress;
+
         Loaded += (_, _) =>
         {
             if (_loaded) return;
             _loaded = true;
+            GameNav.SelectedIndex = 0;
             _ = LoadAsync();
         };
     }
-
-    private bool _loaded;
 
     #region 初始化
 
@@ -75,6 +81,7 @@ public sealed partial class DownloadPage : Page
         if (_manifest is null) return;
 
         var current = McVersionCombo.SelectedItem as string;
+
         McVersionCombo.Items.Clear();
         foreach (var version in _manifest.Versions.Where(v => v.Type == "release").Take(120))
             McVersionCombo.Items.Add(version.Id);
@@ -93,36 +100,75 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 
-    #region 分类切换
+    #region 分类导航
 
-    private void Kind_Click(object sender, RoutedEventArgs e)
+    private void Nav_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (sender is not ToggleButton clicked) return;
+        if (sender is not ListView list || list.SelectedItem is not ListViewItem item) return;
+        if (item.Tag is not string tag) return;
 
-        _kind = clicked.Tag as string ?? "vanilla";
-        TabVanilla.IsChecked = _kind == "vanilla";
-        TabLoader.IsChecked = _kind == "loader";
-        TabResource.IsChecked = _kind == "resource";
+        // 三组列表互斥选中
+        foreach (var other in new[] { GameNav, ResourceNav, OtherNav })
+            if (!ReferenceEquals(other, list)) other.SelectedItem = null;
 
-        PanelVanilla.Visibility = _kind == "vanilla" ? Visibility.Visible : Visibility.Collapsed;
-        PanelLoader.Visibility = _kind == "loader" ? Visibility.Visible : Visibility.Collapsed;
-        PanelResource.Visibility = _kind == "resource" ? Visibility.Visible : Visibility.Collapsed;
+        _section = tag;
+        ApplySection();
+    }
 
-        SelectedText.Text = _kind switch
+    private void ApplySection()
+    {
+        PanelVanilla.Visibility = _section == "vanilla" ? Visibility.Visible : Visibility.Collapsed;
+        PanelLoader.Visibility = _section == "loader" ? Visibility.Visible : Visibility.Collapsed;
+        PanelTasks.Visibility = _section == "tasks" ? Visibility.Visible : Visibility.Collapsed;
+
+        var isResource = _section is "mod" or "modpack" or "resourcepack" or "shader";
+        PanelResource.Visibility = isResource ? Visibility.Visible : Visibility.Collapsed;
+
+        if (isResource)
         {
-            "loader" => "选择一个游戏版本与加载器版本",
-            "resource" => "搜索并选择一个资源",
-            _ => "选择一个游戏版本"
-        };
+            ResourceTitle.Text = _section switch
+            {
+                "mod" => "模组",
+                "modpack" => "整合包",
+                "resourcepack" => "资源包",
+                _ => "光影"
+            };
+            _ = SearchResourcesAsync();
+        }
 
-        InstallButton.IsEnabled = false;
-        DetailButton.IsEnabled = false;
+        if (_section == "loader") _ = LoadLoaderVersionsAsync();
+        if (_section == "tasks") RefreshTasks();
+
+        InstallButton.Visibility = _section == "tasks" ? Visibility.Collapsed : Visibility.Visible;
+        DetailButton.Visibility = _section is "vanilla" ? Visibility.Visible : Visibility.Collapsed;
+
+        if (_section == "tasks")
+        {
+            SelectedText.Text = "下载任务管理";
+            InstallButton.IsEnabled = false;
+            DetailButton.IsEnabled = false;
+        }
+        else
+        {
+            ResetSelection();
+        }
+    }
+
+    private void ResetSelection()
+    {
         _selectedVersion = null;
         _selectedResource = null;
+        DetailButton.IsEnabled = false;
 
-        if (!_loaded) return;
-        if (_kind == "loader") _ = LoadLoaderVersionsAsync();
-        if (_kind == "resource") _ = SearchResourcesAsync();
+        SelectedText.Text = _section switch
+        {
+            "loader" => "选择游戏版本与加载器版本后点击下载",
+            "mod" => "搜索并选择一个模组",
+            "modpack" => "搜索并选择一个整合包",
+            "resourcepack" => "搜索并选择一个资源包",
+            "shader" => "搜索并选择一个光影",
+            _ => "选择一个游戏版本"
+        };
     }
 
     #endregion
@@ -217,16 +263,16 @@ public sealed partial class DownloadPage : Page
         }
         catch (Exception ex)
         {
-            LoaderSummary.Text = "查询失败：" + ex.Message;
+            LoaderSummary.Text = "查询失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
             Logger.Error(ex, "查询加载器版本失败");
         }
     }
 
     private void UpdateLoaderNote(string mc)
     {
-        var vanillaInstalled = Directory.Exists(Path.Combine(Paths.VersionsDir, mc));
-        LoaderNote.Text = vanillaInstalled
-            ? $"将基于已安装的 {mc} 安装加载器，安装完成后会生成一个新的版本。"
+        var installed = Directory.Exists(Path.Combine(Paths.VersionsDir, mc));
+        LoaderNote.Text = installed
+            ? $"将基于已安装的 {mc} 安装加载器，完成后会生成一个新版本。"
             : $"尚未安装原版 {mc}：安装时会先自动下载原版，再安装加载器。";
     }
 
@@ -248,7 +294,7 @@ public sealed partial class DownloadPage : Page
 
     private void McVersion_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (_kind == "loader") _ = LoadLoaderVersionsAsync();
+        if (_loaded && _section == "loader") _ = LoadLoaderVersionsAsync();
     }
 
     private async void InstallLoader_Click(object sender, RoutedEventArgs e)
@@ -257,29 +303,15 @@ public sealed partial class DownloadPage : Page
         var loaderVersion = LoaderVersionCombo.SelectedItem as string;
         if (mc is null || loaderVersion is null || _busy) return;
 
-        _busy = true;
-        InstallLoaderButton.IsEnabled = false;
-        CancelButton.Visibility = Visibility.Visible;
-        PauseButton.Visibility = Visibility.Visible;
-        PauseButton.Content = "暂停";
-        DownloadProgress.Visibility = Visibility.Visible;
-        DownloadProgress.Value = 0;
-        _cts = new CancellationTokenSource();
-
-        var progress = new Progress<(string step, double ratio)>(p =>
-        {
-            DownloadProgress.Value = Math.Clamp(p.ratio, 0, 1);
-            ProgressText.Text = p.step;
-        });
+        BeginBusy();
+        var progress = MakeProgress();
 
         try
         {
             string newId = string.Empty;
-            await DownloadQueue.RunAsync($"安装 {CurrentLoaderName()} {loaderVersion}",
-                DownloadTaskKind.Loader,
+            await DownloadQueue.RunAsync($"安装 {CurrentLoaderName()} {loaderVersion}", DownloadTaskKind.Loader,
                 async (_, token) =>
                 {
-                    // 确保原版基础版本存在
                     if (!Directory.Exists(Path.Combine(Paths.VersionsDir, mc)))
                     {
                         ProgressText.Text = "正在下载原版游戏…";
@@ -288,33 +320,26 @@ public sealed partial class DownloadPage : Page
 
                     newId = await LoaderInstaller.InstallAsync(CurrentLoaderKind(), mc, loaderVersion,
                         progress, token);
-                }, _cts.Token);
+                }, _cts!.Token);
 
             ProgressText.Text = $"✓ {newId} 安装完成";
             SelectedText.Text = $"已安装 {newId}";
             _selectedVersion = newId;
             DetailButton.IsEnabled = true;
-            InstallButton.IsEnabled = true;
         }
         catch (OperationCanceledException)
         {
-            ProgressText.Text = "已取消";
+            ProgressText.Text = "已取消并清理临时文件";
         }
         catch (Exception ex)
         {
             Logger.Error(ex, $"安装加载器失败 {mc} {loaderVersion}");
-            ProgressText.Text = "安装失败：" + ex.Message;
-            await ShowAsync("安装失败", ex.Message);
+            ProgressText.Text = "安装失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
         }
         finally
         {
-            _busy = false;
-            InstallLoaderButton.IsEnabled = true;
-            CancelButton.Visibility = Visibility.Collapsed;
-            PauseButton.Visibility = Visibility.Collapsed;
-            DownloadProgress.Visibility = Visibility.Collapsed;
-            _cts?.Dispose();
-            _cts = null;
+            EndBusy();
+            RefreshTasks();
         }
     }
 
@@ -322,13 +347,13 @@ public sealed partial class DownloadPage : Page
 
     #region 社区资源
 
-    private ResourceType CurrentResourceType() =>
-        ResModpack.IsChecked == true ? ResourceType.Modpack
-        : ResResourcePack.IsChecked == true ? ResourceType.ResourcePack
-        : ResShader.IsChecked == true ? ResourceType.Shader
-        : ResourceType.Mod;
-
-    private void ResType_Changed(object sender, RoutedEventArgs e) => _ = SearchResourcesAsync();
+    private ResourceType CurrentResourceType() => _section switch
+    {
+        "modpack" => ResourceType.Modpack,
+        "resourcepack" => ResourceType.ResourcePack,
+        "shader" => ResourceType.Shader,
+        _ => ResourceType.Mod
+    };
 
     private void ResourceSearch_Submitted(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
         => _ = SearchResourcesAsync();
@@ -338,7 +363,6 @@ public sealed partial class DownloadPage : Page
         if (ResourceList.SelectedItem is not ResourceCard card) return;
 
         _resourceFiles = [];
-
         _selectedResource = new ResourceHit
         {
             Id = card.Id,
@@ -349,7 +373,6 @@ public sealed partial class DownloadPage : Page
 
         SelectedText.Text = $"已选择：{card.Name}";
         InstallButton.IsEnabled = !_busy;
-        DetailButton.IsEnabled = false;
     }
 
     private void ResourceList_ItemClick(object sender, ItemClickEventArgs e)
@@ -359,12 +382,9 @@ public sealed partial class DownloadPage : Page
 
     private async Task SearchResourcesAsync()
     {
-        if (_busy) return;
-
-        // 控件可能在 XAML 完全载入前被早触发的回调访问，这里做防御
+        if (_busy || !_loaded) return;
         if (ResourceSearchBox is null || ResourceList is null ||
-            ResourceVersionCombo is null || ResourceSourceCombo is null)
-            return;
+            ResourceVersionCombo is null || ResourceSourceCombo is null) return;
 
         var query = ResourceSearchBox.Text?.Trim() ?? string.Empty;
 
@@ -384,10 +404,7 @@ public sealed partial class DownloadPage : Page
                 : await ResourceService.SearchModrinthAsync(query, type, gameVersion);
 
             if (hits.Count == 0 && !useCf)
-            {
-                // Modrinth 失败时自动回退 CurseForge
                 hits = await ResourceService.SearchCurseForgeAsync(query, type, gameVersion);
-            }
 
             foreach (var hit in hits)
             {
@@ -398,8 +415,7 @@ public sealed partial class DownloadPage : Page
                     Summary = hit.Description,
                     Source = hit.Source == ResourceSource.Modrinth ? "Modrinth" : "CurseForge",
                     Meta = $"下载 {FormatDownloads(hit.Downloads)}" +
-                           (string.IsNullOrEmpty(hit.Author) ? string.Empty : $" · {hit.Author}") +
-                           (string.IsNullOrEmpty(hit.Categories) ? string.Empty : $" · {hit.Categories}")
+                           (string.IsNullOrEmpty(hit.Author) ? string.Empty : $" · {hit.Author}")
                 });
             }
 
@@ -409,7 +425,7 @@ public sealed partial class DownloadPage : Page
         }
         catch (Exception ex)
         {
-            SelectedText.Text = "搜索失败：" + ex.Message;
+            SelectedText.Text = "搜索失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
             Logger.Error(ex, "搜索社区资源失败");
         }
     }
@@ -419,155 +435,6 @@ public sealed partial class DownloadPage : Page
         if (count >= 1_000_000) return $"{count / 1_000_000.0:F1}M";
         if (count >= 1_000) return $"{count / 1_000.0:F1}K";
         return count.ToString();
-    }
-
-    #endregion
-
-    #region 安装 / 下载
-
-    private async void Install_Click(object sender, RoutedEventArgs e)
-    {
-        if (_busy) return;
-
-        if (_kind == "resource")
-        {
-            await InstallResourceAsync();
-            return;
-        }
-
-        if (_selectedVersion is null) return;
-        await InstallVanillaAsync();
-    }
-
-    private async Task InstallVanillaAsync()
-    {
-        _busy = true;
-        InstallButton.IsEnabled = false;
-        CancelButton.Visibility = Visibility.Visible;
-        PauseButton.Visibility = Visibility.Visible;
-        PauseButton.Content = "暂停";
-        DownloadProgress.Visibility = Visibility.Visible;
-        DownloadProgress.Value = 0;
-        _cts = new CancellationTokenSource();
-
-        var progress = new Progress<(string step, double ratio)>(p =>
-        {
-            DownloadProgress.Value = Math.Clamp(p.ratio, 0, 1);
-            ProgressText.Text = p.step;
-        });
-
-        try
-        {
-            // 通过队列执行，以便支持暂停 / 继续
-            await DownloadQueue.RunAsync($"安装 {_selectedVersion}", DownloadTaskKind.Vanilla,
-                async (downloader, token) =>
-                {
-                    await VanillaInstaller.InstallAsync(_selectedVersion!, Paths.VersionsDir, progress, token);
-                }, _cts.Token);
-
-            LauncherConfig.Current.LastInstance = _selectedVersion;
-            LauncherConfig.Current.Save();
-
-            ProgressText.Text = $"✓ {_selectedVersion} 安装完成";
-            DetailButton.IsEnabled = true;
-        }
-        catch (OperationCanceledException)
-        {
-            ProgressText.Text = "已取消下载";
-        }
-        catch (Exception ex)
-        {
-            Logger.Error(ex, $"安装 {_selectedVersion} 失败");
-            ProgressText.Text = "安装失败：" + ex.Message;
-            await ShowAsync("安装失败", ex.Message + "\n\n提示：可在下载设置中切换下载源后重试。");
-        }
-        finally
-        {
-            _busy = false;
-            InstallButton.IsEnabled = true;
-            CancelButton.Visibility = Visibility.Collapsed;
-            PauseButton.Visibility = Visibility.Collapsed;
-            DownloadProgress.Visibility = Visibility.Collapsed;
-            _cts?.Dispose();
-            _cts = null;
-        }
-    }
-
-    private async Task InstallResourceAsync()
-    {
-        if (_selectedResource is null)
-        {
-            await ShowAsync("未选择资源", "请先在列表中搜索并选择一个资源。");
-            return;
-        }
-
-        // 选择目标版本
-        var installed = VersionLoader.GetInstalledVersions();
-        if (installed.Count == 0)
-        {
-            await ShowAsync("没有可用版本", "请先在“原版游戏”中安装一个版本。");
-            return;
-        }
-
-        var combo = new ComboBox { ItemsSource = installed, SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
-        var dialog = new ContentDialog
-        {
-            Title = "安装到哪个版本？",
-            Content = combo,
-            PrimaryButtonText = "继续",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = XamlRoot
-        };
-
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-
-        var targetVersion = combo.SelectedItem as string;
-        if (targetVersion is null) return;
-
-        _busy = true;
-        InstallButton.IsEnabled = false;
-        DownloadProgress.Visibility = Visibility.Visible;
-        DownloadProgress.Value = 0;
-
-        var progress = new Progress<(string step, double ratio)>(p =>
-        {
-            DownloadProgress.Value = Math.Clamp(p.ratio, 0, 1);
-            ProgressText.Text = p.step;
-        });
-
-        try
-        {
-            await EnsureResourceFilesAsync();
-
-            if (_resourceFiles.Count == 0)
-            {
-                ProgressText.Text = "没有找到可下载的文件";
-                return;
-            }
-
-            var file = _resourceFiles[0];
-            var type = _selectedResource.Type;
-            await DownloadQueue.RunAsync($"下载 {file.FileName}", DownloadTaskKind.Resource,
-                async (_, token) =>
-                {
-                    await ResourceService.DownloadToVersionAsync(file, targetVersion, type, progress, token);
-                });
-
-            ProgressText.Text = $"✓ 已下载 {file.FileName} 到 {targetVersion}";
-        }
-        catch (Exception ex)
-        {
-            Logger.Error(ex, "下载社区资源失败");
-            ProgressText.Text = "下载失败：" + ex.Message;
-            await ShowAsync("下载失败", ex.Message);
-        }
-        finally
-        {
-            _busy = false;
-            InstallButton.IsEnabled = true;
-            DownloadProgress.Visibility = Visibility.Collapsed;
-        }
     }
 
     private async Task EnsureResourceFilesAsync()
@@ -584,14 +451,253 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 
-    #region 其他
+    #region 安装 / 下载
 
-    private void Cancel_Click(object sender, RoutedEventArgs e) => _cts?.Cancel();
+    private void Install_Click(object sender, RoutedEventArgs e)
+    {
+        if (_busy) return;
 
-    /// <summary>暂停 / 继续当前下载任务。</summary>
+        if (_section is "mod" or "modpack" or "resourcepack" or "shader")
+            _ = InstallResourceAsync();
+        else if (_selectedVersion is not null)
+            _ = InstallVanillaAsync();
+    }
+
+    private async Task InstallVanillaAsync()
+    {
+        BeginBusy();
+        var progress = MakeProgress();
+
+        try
+        {
+            await DownloadQueue.RunAsync($"安装 {_selectedVersion}", DownloadTaskKind.Vanilla,
+                async (_, token) =>
+                {
+                    await VanillaInstaller.InstallAsync(_selectedVersion!, Paths.VersionsDir, progress, token);
+                }, _cts!.Token);
+
+            LauncherConfig.Current.LastInstance = _selectedVersion;
+            LauncherConfig.Current.Save();
+
+            ProgressText.Text = $"✓ {_selectedVersion} 安装完成";
+            DetailButton.IsEnabled = true;
+        }
+        catch (OperationCanceledException)
+        {
+            ProgressText.Text = "已取消并清理临时文件";
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, $"安装 {_selectedVersion} 失败");
+            ProgressText.Text = "安装失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
+        }
+        finally
+        {
+            EndBusy();
+            RefreshTasks();
+        }
+    }
+
+    private async Task InstallResourceAsync()
+    {
+        if (_selectedResource is null)
+        {
+            await ShowAsync("未选择资源", "请先在列表中搜索并选择一个资源。");
+            return;
+        }
+
+        var installed = VersionLoader.GetInstalledVersions();
+        if (installed.Count == 0)
+        {
+            await ShowAsync("没有可用版本", "请先在“原版游戏”中安装一个版本。");
+            return;
+        }
+
+        var combo = new ComboBox
+        {
+            ItemsSource = installed,
+            SelectedIndex = 0,
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        var dialog = new ContentDialog
+        {
+            Title = "安装到哪个版本？",
+            Content = combo,
+            PrimaryButtonText = "继续",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        if (combo.SelectedItem is not string targetVersion) return;
+
+        BeginBusy();
+        var progress = MakeProgress();
+
+        try
+        {
+            await EnsureResourceFilesAsync();
+
+            if (_resourceFiles.Count == 0)
+            {
+                ProgressText.Text = "没有找到可下载的文件";
+                return;
+            }
+
+            var file = _resourceFiles[0];
+            var type = _selectedResource.Type;
+
+            await DownloadQueue.RunAsync($"下载 {file.FileName}", DownloadTaskKind.Resource,
+                async (_, token) =>
+                {
+                    await ResourceService.DownloadToVersionAsync(file, targetVersion, type, progress, token);
+                });
+
+            ProgressText.Text = $"✓ 已下载 {file.FileName} 到 {targetVersion}";
+        }
+        catch (OperationCanceledException)
+        {
+            ProgressText.Text = "已取消并清理临时文件";
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "下载社区资源失败");
+            ProgressText.Text = "下载失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
+        }
+        finally
+        {
+            EndBusy();
+            RefreshTasks();
+        }
+    }
+
+    #endregion
+
+    #region 下载任务管理
+
+    private void OnQueueChanged() => Dispatch(RefreshTasks);
+
+    private void OnQueueProgress(DownloadTask task) => Dispatch(() =>
+    {
+        var card = _tasks.FirstOrDefault(t => t.Id == task.Id);
+        if (card is null) return;
+
+        card.Ratio = task.Ratio;
+        card.Detail = task.ProgressText;
+        card.State = task.StateText;
+    });
+
+    private void RefreshTasks()
+    {
+        _tasks.Clear();
+        foreach (var task in DownloadQueue.Tasks)
+        {
+            _tasks.Add(new TaskCard
+            {
+                Id = task.Id,
+                Title = task.Title,
+                Detail = task.ProgressText,
+                State = task.StateText,
+                Ratio = task.Ratio
+            });
+        }
+    }
+
+    private void PauseAll_Click(object sender, RoutedEventArgs e)
+    {
+        DownloadQueue.Pause();
+        RefreshTasks();
+    }
+
+    private void ResumeAll_Click(object sender, RoutedEventArgs e)
+    {
+        DownloadQueue.Resume();
+        RefreshTasks();
+    }
+
+    private void PruneTasks_Click(object sender, RoutedEventArgs e)
+    {
+        DownloadQueue.PruneFinished();
+        RefreshTasks();
+    }
+
+    private void PauseTask_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string id }) return;
+
+        var task = DownloadQueue.Tasks.FirstOrDefault(t => t.Id == id);
+        if (task is null) return;
+
+        if (task.State == DownloadState.Paused) DownloadQueue.Resume(id);
+        else DownloadQueue.Pause(id);
+
+        RefreshTasks();
+    }
+
+    private async void CancelTask_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string id }) return;
+
+        var task = DownloadQueue.Tasks.FirstOrDefault(t => t.Id == id);
+        if (task is null) return;
+
+        var confirm = new ContentDialog
+        {
+            Title = "取消下载",
+            Content = $"将取消「{task.Title}」并删除已下载的临时文件，确定继续吗？",
+            PrimaryButtonText = "取消并清理",
+            CloseButtonText = "保留",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+
+        DownloadQueue.Cancel(id);
+        DownloadQueue.PruneFinished();
+        RefreshTasks();
+        ProgressText.Text = "已取消并清理临时文件";
+    }
+
+    #endregion
+
+    #region 通用
+
+    private void BeginBusy()
+    {
+        _busy = true;
+        InstallButton.IsEnabled = false;
+        CancelButton.Visibility = Visibility.Visible;
+        PauseButton.Visibility = Visibility.Visible;
+        PauseButton.Content = "暂停";
+        DownloadProgress.Visibility = Visibility.Visible;
+        DownloadProgress.Value = 0;
+        _cts = new CancellationTokenSource();
+    }
+
+    private void EndBusy()
+    {
+        _busy = false;
+        InstallButton.IsEnabled = true;
+        CancelButton.Visibility = Visibility.Collapsed;
+        PauseButton.Visibility = Visibility.Collapsed;
+        DownloadProgress.Visibility = Visibility.Collapsed;
+        _cts?.Dispose();
+        _cts = null;
+    }
+
+    private IProgress<(string step, double ratio)> MakeProgress() =>
+        new Progress<(string step, double ratio)>(p =>
+        {
+            DownloadProgress.Value = Math.Clamp(p.ratio, 0, 1);
+            ProgressText.Text = p.step;
+        });
+
     private void Pause_Click(object sender, RoutedEventArgs e)
     {
-        var task = DownloadQueue.Tasks.FirstOrDefault(t => t.State is DownloadState.Running or DownloadState.Paused);
+        var task = DownloadQueue.Tasks.FirstOrDefault(t =>
+            t.State is DownloadState.Running or DownloadState.Paused);
         if (task is null) return;
 
         if (task.State == DownloadState.Paused)
@@ -606,6 +712,12 @@ public sealed partial class DownloadPage : Page
             PauseButton.Content = "继续";
             ProgressText.Text = "已暂停下载，点击“继续”恢复";
         }
+    }
+
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        _cts?.Cancel();
+        DownloadQueue.Cancel();
     }
 
     private void SourceSettings_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("settings");
@@ -623,6 +735,12 @@ public sealed partial class DownloadPage : Page
         }
     }
 
+    private void Dispatch(Action action)
+    {
+        if (DispatcherQueue is null) return;
+        DispatcherQueue.TryEnqueue(() => action());
+    }
+
     private async Task ShowAsync(string title, string message)
     {
         var dialog = new ContentDialog
@@ -637,12 +755,3 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
-
-
-
-
-
-
-
-
-

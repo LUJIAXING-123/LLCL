@@ -117,11 +117,19 @@ public sealed partial class LinkPage : Page
         var connected = status.State == LinkState.Connected && status.RoomCode is not null;
 
         StateBadgeText.Text = status.StateText;
-        StateBadge.Background = status.State switch
+
+        // 徽标使用「实心底色 + 白字」的组合，保证在 Mica 材质上依然清晰可读
+        (StateBadge.Background, StateBadgeText.Foreground) = status.State switch
         {
-            LinkState.Connected => Brush("SystemFillColorSuccessBackgroundBrush"),
-            LinkState.Error => Brush("SystemFillColorCriticalBackgroundBrush"),
-            _ => Brush("SystemFillColorNeutralBackgroundBrush")
+            LinkState.Connected => (Brush("SystemFillColorSuccessBrush"),
+                                    Brush("TextOnAccentFillColorPrimaryBrush")),
+            LinkState.Error => (Brush("SystemFillColorCriticalBrush"),
+                                Brush("TextOnAccentFillColorPrimaryBrush")),
+            LinkState.Creating or LinkState.Joining or LinkState.Initializing
+                              => (Brush("SystemFillColorCautionBrush"),
+                                  Brush("TextOnAccentFillColorPrimaryBrush")),
+            _ => (Brush("SystemFillColorNeutralBrush"),
+                  Brush("TextOnAccentFillColorPrimaryBrush"))
         };
 
         RoomCodeRow.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
@@ -376,3 +384,4 @@ public sealed partial class LinkPage : Page
 
     #endregion
 }
+

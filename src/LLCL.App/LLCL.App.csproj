@@ -69,9 +69,12 @@
     <ItemGroup>
         <Manifest Include="$(ApplicationManifest)" />
         <Content Include="Package.appxmanifest" />
-        <Content Include="PackageAssets\**\*.png" />
-        <Content Include="Assets\**\*.png" />
-        <Content Include="Assets\llcl.ico" />
+        <Content Include="PackageAssets\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="Assets\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="Assets\llcl.ico" CopyToOutputDirectory="PreserveNewest" />
+
+        <!-- 图标同时嵌入程序集，确保打包与绿色版都能加载 -->
+        <EmbeddedResource Include="Assets\llcl.png" LogicalName="LLCL.Assets.llcl.png" />
     </ItemGroup>
 
     <ItemGroup>

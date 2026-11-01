@@ -34,7 +34,8 @@
             <StackPanel Spacing="14">
 
                 <!-- ===== 状态面板 ===== -->
-                <Border x:Name="StatusPanel" Style="{StaticResource CardStyle}">
+                <Border x:Name="StatusPanel" Style="{StaticResource CardStyle}"
+                        Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
                     <StackPanel Spacing="12">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -43,10 +44,10 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Orientation="Horizontal" Spacing="10">
                                 <TextBlock Text="房间状态" FontSize="16" FontWeight="SemiBold" />
-                                <Border x:Name="StateBadge" Background="{ThemeResource SystemFillColorSuccessBackgroundBrush}"
-                                        CornerRadius="10" Padding="8,2" VerticalAlignment="Center">
-                                    <TextBlock x:Name="StateBadgeText" Text="未联机" FontSize="11"
-                                               Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}" />
+                                <Border x:Name="StateBadge" Background="{ThemeResource SystemFillColorNeutralBackgroundBrush}"
+                                        CornerRadius="10" Padding="10,3" VerticalAlignment="Center">
+                                    <TextBlock x:Name="StateBadgeText" Text="未联机" FontSize="12" FontWeight="SemiBold"
+                                               Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
                                 </Border>
                             </StackPanel>
                             <Button Grid.Column="1" x:Name="RefreshButton" Content="刷新"
@@ -79,40 +80,44 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
 
-                            <Border Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                    CornerRadius="6" Padding="10,8">
+                            <Border Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1" CornerRadius="6" Padding="10,8">
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="虚拟 IP" FontSize="11"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    <TextBlock x:Name="VirtualIpText" Text="—" FontSize="14"
+                                    <TextBlock x:Name="VirtualIpText" Text="—" FontSize="15" FontWeight="SemiBold"
                                                FontFamily="Consolas" IsTextSelectionEnabled="True" />
                                 </StackPanel>
                             </Border>
 
-                            <Border Grid.Column="1" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                    CornerRadius="6" Padding="10,8">
+                            <Border Grid.Column="1" Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1" CornerRadius="6" Padding="10,8">
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="中继状态" FontSize="11"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    <TextBlock x:Name="RelayText" Text="—" FontSize="14" />
+                                    <TextBlock x:Name="RelayText" Text="—" FontSize="15" FontWeight="SemiBold" />
                                 </StackPanel>
                             </Border>
 
-                            <Border Grid.Column="2" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                    CornerRadius="6" Padding="10,8">
+                            <Border Grid.Column="2" Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1" CornerRadius="6" Padding="10,8">
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="延迟" FontSize="11"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    <TextBlock x:Name="PingText" Text="—" FontSize="14" />
+                                    <TextBlock x:Name="PingText" Text="—" FontSize="15" FontWeight="SemiBold" />
                                 </StackPanel>
                             </Border>
 
-                            <Border Grid.Column="3" Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                    CornerRadius="6" Padding="10,8">
+                            <Border Grid.Column="3" Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1" CornerRadius="6" Padding="10,8">
                                 <StackPanel Spacing="2">
                                     <TextBlock Text="在线人数" FontSize="11"
                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    <TextBlock x:Name="OnlineText" Text="—" FontSize="14" />
+                                    <TextBlock x:Name="OnlineText" Text="—" FontSize="15" FontWeight="SemiBold" />
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -271,3 +276,5 @@
                  Severity="Informational" />
     </Grid>
 </Page>
+
+
