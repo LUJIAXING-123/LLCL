@@ -44,6 +44,9 @@ public sealed partial class DownloadPage : Page
 
         Loaded += (_, _) =>
         {
+            // 每次回到本页都恢复真实下载状态，避免界面与队列脱节
+            RefreshTasks();
+
             if (_loaded) return;
             _loaded = true;
             GameNav.SelectedIndex = 0;
@@ -96,6 +99,9 @@ public sealed partial class DownloadPage : Page
         foreach (var version in _manifest.Versions.Where(v => v.Type == "release").Take(60))
             ResourceVersionCombo.Items.Add(version.Id);
         ResourceVersionCombo.SelectedIndex = 0;
+
+        // 游戏版本就绪后，若当前就在加载器页，立即查询并自动选中加载器版本
+        if (_section == "loader") _ = LoadLoaderVersionsAsync();
     }
 
     #endregion
@@ -242,7 +248,9 @@ public sealed partial class DownloadPage : Page
     private async Task LoadLoaderVersionsAsync()
     {
         var mc = McVersionCombo.SelectedItem as string;
-        if (mc is null) return;
+
+        // 游戏版本未就绪时不做查询；等 PopulateMcVersions 选好默认项后会再次调用
+        if (string.IsNullOrEmpty(mc)) return;
 
         LoaderVersionCombo.Items.Clear();
         LoaderSummary.Text = "正在查询加载器版本…";
@@ -253,7 +261,12 @@ public sealed partial class DownloadPage : Page
             var versions = await LoaderInstaller.GetVersionsAsync(CurrentLoaderKind(), mc);
             foreach (var v in versions.Take(80)) LoaderVersionCombo.Items.Add(v.Version);
 
-            if (LoaderVersionCombo.Items.Count > 0) LoaderVersionCombo.SelectedIndex = 0;
+            // 自动选中最新版本，避免用户必须手动点一次才能安装
+            if (LoaderVersionCombo.Items.Count > 0)
+            {
+                LoaderVersionCombo.SelectedIndex = 0;
+                LoaderVersionCombo.UpdateLayout();
+            }
 
             LoaderSummary.Text = versions.Count == 0
                 ? $"未找到适用于 {mc} 的 {CurrentLoaderName()} 版本"
@@ -576,16 +589,47 @@ public sealed partial class DownloadPage : Page
 
     #region 下载任务管理
 
-    private void OnQueueChanged() => Dispatch(RefreshTasks);
+    private void OnQueueChanged() => Dispatch(() =>
+    {
+        RefreshTasks();
+        SyncActiveProgress();
+    });
 
     private void OnQueueProgress(DownloadTask task) => Dispatch(() =>
     {
         var card = _tasks.FirstOrDefault(t => t.Id == task.Id);
-        if (card is null) return;
 
-        card.Ratio = task.Ratio;
-        card.Detail = task.ProgressText;
-        card.State = task.StateText;
+        if (card is null)
+        {
+            // 新任务：补进列表，否则进度无处可写
+            card = new TaskCard
+            {
+                Id = task.Id,
+                Title = task.Title,
+                Detail = task.ProgressText,
+                State = task.StateText,
+                Ratio = task.Ratio
+            };
+            _tasks.Add(card);
+        }
+        else
+        {
+            card.Detail = task.ProgressText;
+            card.State = task.StateText;
+            card.Ratio = task.Ratio;
+        }
+
+        // 底部进度条与按钮状态跟随真实任务
+        if (task.State is DownloadState.Running or DownloadState.Paused)
+        {
+            _busy = true;
+            CancelButton.Visibility = Visibility.Visible;
+            PauseButton.Visibility = Visibility.Visible;
+            DownloadProgress.Visibility = Visibility.Visible;
+            DownloadProgress.Value = Math.Clamp(task.Ratio, 0, 1);
+            PauseButton.Content = task.State == DownloadState.Paused ? "继续" : "暂停";
+            ProgressText.Text = task.ProgressText;
+        }
     });
 
     private void RefreshTasks()
@@ -602,6 +646,35 @@ public sealed partial class DownloadPage : Page
                 Ratio = task.Ratio
             });
         }
+
+        SyncActiveProgress();
+    }
+
+    /// <summary>
+    /// 把界面底部进度条同步到队列中真实运行的任务。
+    /// 这样从其它页面切回来时，进度不会归零或消失。
+    /// </summary>
+    private void SyncActiveProgress()
+    {
+        var active = DownloadQueue.Tasks.FirstOrDefault(t =>
+            t.State is DownloadState.Running or DownloadState.Paused);
+
+        if (active is null)
+        {
+            // 没有进行中的任务：收尾界面状态
+            EndBusy();
+            return;
+        }
+
+        _busy = true;
+        CancelButton.Visibility = Visibility.Visible;
+        PauseButton.Visibility = Visibility.Visible;
+        DownloadProgress.Visibility = Visibility.Visible;
+        DownloadProgress.Value = Math.Clamp(active.Ratio, 0, 1);
+
+        PauseButton.Content = active.State == DownloadState.Paused ? "继续" : "暂停";
+        ProgressText.Text = active.ProgressText;
+        InstallButton.IsEnabled = false;
     }
 
     private void PauseAll_Click(object sender, RoutedEventArgs e)
@@ -755,3 +828,4 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+

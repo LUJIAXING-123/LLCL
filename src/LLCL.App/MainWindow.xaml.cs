@@ -177,17 +177,34 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// 页面缓存：切换标签时复用已有页面实例。
+    /// 这样下载进度、列表滚动位置等界面状态不会丢，也避免重复订阅全局事件造成泄漏。
+    /// </summary>
+    private readonly Dictionary<string, Page> _pageCache = new();
+
     public void Navigate(string tag)
     {
-        Page page = tag switch
+        if (!_pageCache.TryGetValue(tag, out var page) || page is null)
         {
-            "home" => new HomePage(),
-            "download" => new DownloadPage(),
-            "link" => new LinkPage(),
-            "settings" => new SettingsPage(),
-            "about" => new AboutPage(),
-            _ => new HomePage()
-        };
+            page = tag switch
+            {
+                "home" => new HomePage(),
+                "download" => new DownloadPage(),
+                "link" => new LinkPage(),
+                "settings" => new SettingsPage(),
+                "about" => new AboutPage(),
+                _ => new HomePage()
+            };
+            _pageCache[tag] = page;
+        }
+
+        // 同一页面重复导航时直接返回，避免不必要的重建
+        if (ReferenceEquals(ContentFrame.Content, page))
+        {
+            UpdateNavSelection(tag);
+            return;
+        }
 
         ContentFrame.Content = page;
         UpdateNavSelection(tag);

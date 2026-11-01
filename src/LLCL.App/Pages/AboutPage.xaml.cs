@@ -36,7 +36,8 @@ public sealed partial class AboutPage : Page
         try
         {
             var asm = Assembly.GetExecutingAssembly();
-            foreach (var name in new[] { "LLCL.Assets.llcl.png", "Assets.llcl.png", "llcl.png" })
+            // 优先用原图（细节最好），其次用 256px 版本
+            foreach (var name in new[] { "LLCL.Assets.llcl-logo.png", "LLCL.Assets.llcl.png", "Assets.llcl.png", "llcl.png" })
             {
                 using var stream = asm.GetManifestResourceStream(name);
                 if (stream is null) continue;
@@ -57,7 +58,8 @@ public sealed partial class AboutPage : Page
         {
             try
             {
-                var path = Path.Combine(dir, "Assets", "llcl.png");
+                var path = Path.Combine(dir, "Assets", "llcl-logo.png");
+                if (!File.Exists(path)) path = Path.Combine(dir, "Assets", "llcl.png");
                 if (!File.Exists(path)) continue;
 
                 var bytes = File.ReadAllBytes(path);
@@ -99,3 +101,4 @@ public sealed partial class AboutPage : Page
         }
     }
 }
+

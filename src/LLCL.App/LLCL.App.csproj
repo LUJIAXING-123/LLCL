@@ -75,6 +75,9 @@
 
         <!-- 图标同时嵌入程序集，确保打包与绿色版都能加载 -->
         <EmbeddedResource Include="Assets\llcl.png" LogicalName="LLCL.Assets.llcl.png" />
+        <!-- 关于页使用原图，保留细节 -->
+        <EmbeddedResource Include="Assets\llcl-logo.png" LogicalName="LLCL.Assets.llcl-logo.png" />
+        <Content Include="Assets\llcl-logo.png" CopyToOutputDirectory="PreserveNewest" Condition="Exists('Assets\llcl-logo.png')" />
     </ItemGroup>
 
     <ItemGroup>
@@ -96,4 +99,5 @@
 
     <Import Project="$(_LlclRepoRoot)build\Version.targets" />
 </Project>
+
 

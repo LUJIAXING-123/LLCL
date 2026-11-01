@@ -50,12 +50,44 @@ public sealed class LanItem
     public int Port { get; init; }
 }
 
-public sealed class TaskCard
+/// <summary>
+/// 下载任务卡片模型。实现 INotifyPropertyChanged，
+/// 配合 x:Bind 的 OneWay 模式，让进度与状态能实时刷新。
+/// </summary>
+public sealed class TaskCard : System.ComponentModel.INotifyPropertyChanged
 {
     public string Id { get; init; } = string.Empty;
     public string Title { get; init; } = string.Empty;
-    public string Detail { get; set; } = string.Empty;
-    public string State { get; set; } = string.Empty;
-    public double Ratio { get; set; }
+
+    private string _detail = string.Empty;
+    private string _state = string.Empty;
+    private double _ratio;
+
+    public string Detail
+    {
+        get => _detail;
+        set => SetField(ref _detail, value, nameof(Detail));
+    }
+
+    public string State
+    {
+        get => _state;
+        set => SetField(ref _state, value, nameof(State));
+    }
+
+    public double Ratio
+    {
+        get => _ratio;
+        set => SetField(ref _ratio, value, nameof(Ratio));
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+
+    private void SetField<T>(ref T field, T value, string name)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value;
+        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
 }
 

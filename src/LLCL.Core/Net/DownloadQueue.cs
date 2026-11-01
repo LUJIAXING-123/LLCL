@@ -120,7 +120,7 @@ public static class DownloadQueue
             _tasks.Add(task);
         }
 
-        Changed?.Invoke();
+        _Notify(task);
 
         // 串行化：同一时间只跑一个队列任务，避免占满带宽
         await _runnerGate.WaitAsync(ct).ConfigureAwait(false);
@@ -132,6 +132,7 @@ public static class DownloadQueue
             var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
             task.Cts = linked;
             task.State = DownloadState.Running;
+            _Notify(task);
 
             downloader.Progress += (_, e) =>
             {
@@ -140,29 +141,31 @@ public static class DownloadQueue
                 task.TotalBytes = e.TotalBytes;
                 task.SpeedBytesPerSecond = e.SpeedBytesPerSecond;
                 task.CurrentFile = e.CurrentFile;
-                if (downloader.IsPaused) task.State = DownloadState.Paused;
-                else if (task.State == DownloadState.Paused) task.State = DownloadState.Running;
 
-                ProgressUpdated?.Invoke(task);
+                // 以下载器实际状态为准，避免 UI 与真实状态不一致
+                task.State = downloader.IsPaused ? DownloadState.Paused : DownloadState.Running;
+
+                _Notify(task);
             };
-
-            Changed?.Invoke();
 
             task.Runner = work(downloader, linked.Token);
             await task.Runner.ConfigureAwait(false);
 
             task.State = DownloadState.Completed;
             task.Ratio = 1;
+            task.SpeedBytesPerSecond = 0;
         }
         catch (OperationCanceledException)
         {
             task.State = DownloadState.Canceled;
+            task.SpeedBytesPerSecond = 0;
             throw;
         }
         catch (Exception ex)
         {
             task.State = DownloadState.Failed;
             task.ErrorMessage = Link.FriendlyError.ToText(ex);
+            task.SpeedBytesPerSecond = 0;
             throw;
         }
         finally
@@ -170,13 +173,24 @@ public static class DownloadQueue
             task.Cts?.Dispose();
             task.Cts = null;
             _runnerGate.Release();
-            Changed?.Invoke();
+
+            // 终态必须广播一次，否则界面会停留在“下载中”
+            _Notify(task);
         }
+    }
+
+    /// <summary>统一的通知入口：同时触发状态与进度事件，保证界面不会漏更新。</summary>
+    private static void _Notify(DownloadTask task)
+    {
+        try { Changed?.Invoke(); } catch (Exception ex) { Logger.Warn($"下载队列通知失败: {ex.Message}"); }
+        try { ProgressUpdated?.Invoke(task); } catch (Exception ex) { Logger.Warn($"下载进度通知失败: {ex.Message}"); }
     }
 
     /// <summary>暂停指定任务（或全部正在运行的任务）。</summary>
     public static void Pause(string? taskId = null)
     {
+        List<DownloadTask> affected = [];
+
         lock (_lock)
         {
             foreach (var task in _tasks)
@@ -186,15 +200,19 @@ public static class DownloadQueue
 
                 task.Downloader?.Pause();
                 task.State = DownloadState.Paused;
+                affected.Add(task);
             }
         }
 
-        Changed?.Invoke();
+        foreach (var task in affected) _Notify(task);
+        if (affected.Count == 0) Changed?.Invoke();
     }
 
     /// <summary>继续指定任务（或全部已暂停的任务）。</summary>
     public static void Resume(string? taskId = null)
     {
+        List<DownloadTask> affected = [];
+
         lock (_lock)
         {
             foreach (var task in _tasks)
@@ -204,15 +222,19 @@ public static class DownloadQueue
 
                 task.Downloader?.Resume();
                 task.State = DownloadState.Running;
+                affected.Add(task);
             }
         }
 
-        Changed?.Invoke();
+        foreach (var task in affected) _Notify(task);
+        if (affected.Count == 0) Changed?.Invoke();
     }
 
     /// <summary>取消指定任务（或全部未完成任务）。</summary>
     public static void Cancel(string? taskId = null)
     {
+        List<DownloadTask> affected = [];
+
         lock (_lock)
         {
             foreach (var task in _tasks)
@@ -223,10 +245,12 @@ public static class DownloadQueue
 
                 task.Downloader?.Cancel();
                 try { task.Cts?.Cancel(); } catch { }
+                affected.Add(task);
             }
         }
 
-        Changed?.Invoke();
+        foreach (var task in affected) _Notify(task);
+        if (affected.Count == 0) Changed?.Invoke();
     }
 
     /// <summary>移除已完成 / 失败 / 取消的任务记录。</summary>
