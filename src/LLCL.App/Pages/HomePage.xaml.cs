@@ -16,8 +16,16 @@ public sealed partial class HomePage : Page
     {
         InitializeComponent();
         Loaded += (_, _) => Refresh();
+
+        // 版本新增 / 删除 / 重命名后自动刷新，避免界面显示过期数据
+        VersionManager.VersionsChanged += OnVersionsChanged;
     }
 
+    private void OnVersionsChanged()
+    {
+        if (DispatcherQueue is null) return;
+        DispatcherQueue.TryEnqueue(Refresh);
+    }
     private void Refresh()
     {
         var config = LauncherConfig.Current;
@@ -39,11 +47,28 @@ public sealed partial class HomePage : Page
         if (entries.Count > 0)
         {
             var index = versions.IndexOf(config.LastInstance ?? string.Empty);
-            VersionComboBox.SelectedIndex = index >= 0 ? index : 0;
-            CurrentVersionText.Text = $"将启动 {entries[VersionComboBox.SelectedIndex].DisplayName}";
+
+            // 上次使用的版本可能已被删除：回退到第一项并同步配置，
+            // 避免下拉框显示与实际选择不一致（列表"错乱"的观感多源于此）
+            if (index < 0)
+            {
+                index = 0;
+                config.LastInstance = versions[0];
+                config.Save();
+            }
+
+            VersionComboBox.SelectedIndex = index;
+            CurrentVersionText.Text = $"将启动 {entries[index].DisplayName}";
         }
         else
         {
+            // 版本全部不存在时清空记忆，避免残留无效的 LastInstance
+            if (!string.IsNullOrEmpty(config.LastInstance))
+            {
+                config.LastInstance = null;
+                config.Save();
+            }
+
             CurrentVersionText.Text = "尚未安装任何版本，请先前往下载中心";
         }
 
@@ -151,6 +176,7 @@ public sealed partial class HomePage : Page
         MainWindow.Instance?.ShowVersionSettings(version);
     }
 }
+
 
 
 

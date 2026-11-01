@@ -40,6 +40,7 @@ public sealed partial class DownloadPage : Page
         ResourceSourceCombo.Items.Add("CurseForge");
 
         DownloadQueue.Changed += OnQueueChanged;
+        VersionManager.VersionsChanged += OnVersionsChanged;
         DownloadQueue.ProgressUpdated += OnQueueProgress;
 
         Loaded += (_, _) =>
@@ -664,6 +665,7 @@ public sealed partial class DownloadPage : Page
 
     #region 下载任务管理
 
+    private void OnVersionsChanged() => Dispatch(RefreshTasks);
     private void OnQueueChanged() => Dispatch(() =>
     {
         RefreshTasks();
@@ -952,6 +954,7 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
 
 
 

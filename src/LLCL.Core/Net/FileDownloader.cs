@@ -76,6 +76,62 @@ public sealed class FileDownloader
     private volatile bool _paused;
     private CancellationTokenSource? _innerCts;
 
+    /// <summary>当前下载器的实时进度快照。供队列在内部下载器不广播事件时主动采样。</summary>
+    public sealed record DownloadSnapshot(
+        double Ratio, long DownloadedBytes, long TotalBytes, long SpeedBytesPerSecond,
+        long CompletedFiles, long TotalFiles, long FailedFiles, string? CurrentFile);
+
+    /// <summary>生成当前进度快照；尚未开始下载时返回 null。</summary>
+    public DownloadSnapshot? Snapshot
+    {
+        get
+        {
+            if (State is DownloadState.Idle) return null;
+
+            var downloaded = Interlocked.Read(ref _downloaded);
+            var total = Interlocked.Read(ref _totalBytes);
+            var ratio = total > 0
+                ? Math.Clamp((double)downloaded / total, 0, 1)
+                : _totalFiles > 0
+                    ? Math.Clamp((double)Interlocked.Read(ref _completedFiles) / _totalFiles, 0, 1)
+                    : 0;
+
+            // 实时计算速度：部分流程（安装器内部）不会频繁触发 Progress 事件，
+            // 因此不能依赖 _RaiseProgress 里更新的 _lastSpeedBytes
+            var now = Environment.TickCount64;
+            var elapsedMs = now - _lastSpeedTick;
+            long speed = 0;
+            if (elapsedMs >= 500)
+            {
+                speed = (downloaded - Interlocked.Read(ref _lastSpeedBytes)) * 1000 / Math.Max(1, elapsedMs);
+                _lastSpeedTick = now;
+                _lastSpeedBytes = downloaded;
+            }
+            else
+            {
+                speed = Interlocked.Read(ref _lastSpeedBytes) > 0
+                    ? (downloaded - Interlocked.Read(ref _lastSpeedBytes)) * 1000 / Math.Max(1, elapsedMs)
+                    : 0;
+            }
+
+            return new DownloadSnapshot(
+                ratio,
+                downloaded,
+                total,
+                speed,
+                Interlocked.Read(ref _completedFiles),
+                Interlocked.Read(ref _totalFiles),
+                Interlocked.Read(ref _failedFiles),
+                null);
+        }
+    }
+
+    /// <summary>
+    /// 把「当前活动下载器」登记为最近一次创建的实例。
+    /// 供安装器这类内部自行创建下载器的流程，让队列能够采样到真实进度。
+    /// </summary>
+    public static FileDownloader? Active { get; private set; }
+
     public event EventHandler<DownloadProgressEventArgs>? Progress;
 
     public DownloadState State { get; private set; } = DownloadState.Idle;
@@ -86,6 +142,9 @@ public sealed class FileDownloader
     public FileDownloader()
     {
         _speedLimitKb = LauncherConfig.Current.DownloadSpeedLimitKb;
+
+        // 登记为当前活动下载器，便于队列采样内部创建的实例
+        Active = this;
     }
 
     /// <summary>暂停下载。已在传输中的分块会先完成再停下。</summary>
@@ -140,6 +199,32 @@ public sealed class FileDownloader
         _paused = false;
         _resumeGate.Set();
         State = DownloadState.Running;
+
+        // 若有文件大小未知（例如加载器安装器 URL 不提供 size），
+        // 先对这批 URL 做一次 HEAD 探测补全大小，避免界面一直显示“未知”。
+        var unknown = items.Where(i => i.Size <= 0).ToList();
+        if (unknown.Count > 0)
+        {
+            foreach (var item in unknown)
+            {
+                try
+                {
+                    var probe = DownloadMirror.MapUrl(item.Url);
+                    using var req = new HttpRequestMessage(HttpMethod.Head, probe);
+                    using var resp = await Http.Client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
+                        .ConfigureAwait(false);
+                    if (resp.IsSuccessStatusCode && resp.Content.Headers.ContentLength is { } len && len > 0)
+                    {
+                        item.Size = len;
+                        Interlocked.Add(ref _totalBytes, len);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Debug($"探测文件大小失败 {item.Url}: {ex.Message}");
+                }
+            }
+        }
 
         _innerCts = new CancellationTokenSource();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _innerCts.Token);
@@ -505,5 +590,8 @@ public sealed class FileDownloader
         return $"{kb / 1024:F1} MB/s";
     }
 }
+
+
+
 
 

@@ -433,6 +433,7 @@ public sealed partial class VersionSettingsPage : Page
                 return;
             }
 
+            // 删除成功后回到下载页；版本列表由 VersionsChanged 事件自动刷新
             MainWindow.Instance?.Navigate("download");
         };
         panel.Children.Add(deleteButton);
@@ -479,6 +480,7 @@ public sealed partial class VersionSettingsPage : Page
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 }
+
 
 
 

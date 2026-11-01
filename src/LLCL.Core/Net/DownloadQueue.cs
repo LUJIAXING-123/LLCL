@@ -45,9 +45,18 @@ public sealed class DownloadTask
             if (State == DownloadState.Completed) return "已完成";
             if (State == DownloadState.Failed) return ErrorMessage ?? "下载失败";
             if (State == DownloadState.Canceled) return "已取消";
+            if (State == DownloadState.Idle) return "等待中";
 
             var done = FormatSize(DownloadedBytes);
-            var total = TotalBytes > 0 ? FormatSize(TotalBytes) : "未知";
+
+            // 总大小未知时不要显示“未知”，只展示已下载量与速度
+            if (TotalBytes <= 0)
+            {
+                var speedOnly = FileDownloader.FormatSpeed(SpeedBytesPerSecond);
+                return speedOnly == "—" ? $"已下载 {done}" : $"已下载 {done} · {speedOnly}";
+            }
+
+            var total = FormatSize(TotalBytes);
             var speed = FileDownloader.FormatSpeed(SpeedBytesPerSecond);
             return $"{done} / {total} · {speed}";
         }
@@ -136,6 +145,8 @@ public static class DownloadQueue
         _Notify(task);
 
         // 串行化：同一时间只跑一个队列任务，避免占满带宽
+        var syncing = true;
+
         await _runnerGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -161,6 +172,34 @@ public static class DownloadQueue
                 _Notify(task);
             };
 
+            // 周期性同步：某些安装流程（如 VanillaInstaller / LoaderInstaller）
+            // 内部自行创建 FileDownloader，不会把进度事件传到队列，
+            // 因此这里主动读取下载器的实时统计，避免任务一直显示“未知”。
+            var syncTask = Task.Run(async () =>
+            {
+                while (syncing && !linked.IsCancellationRequested)
+                {
+                    await Task.Delay(500).ConfigureAwait(false);
+                    if (!syncing) break;
+
+                    // 优先采样队列自己的下载器；若内部流程新建了下载器则采样 Active
+                    var activeDownloader = FileDownloader.Active ?? downloader;
+                    var snapshot = activeDownloader.Snapshot;
+                    if (snapshot is null) continue;
+
+                    task.Ratio = snapshot.Ratio;
+                    task.DownloadedBytes = snapshot.DownloadedBytes;
+                    task.TotalBytes = snapshot.TotalBytes;
+                    task.SpeedBytesPerSecond = snapshot.SpeedBytesPerSecond;
+                    task.CurrentFile = snapshot.CurrentFile;
+
+                    if (downloader.IsPaused) task.State = DownloadState.Paused;
+                    else if (task.State == DownloadState.Paused) task.State = DownloadState.Running;
+
+                    _Notify(task);
+                }
+            }, linked.Token);
+
             task.Runner = work(downloader, linked.Token);
             await task.Runner.ConfigureAwait(false);
 
@@ -183,6 +222,7 @@ public static class DownloadQueue
         }
         finally
         {
+            syncing = false;
             task.Cts?.Dispose();
             task.Cts = null;
             _runnerGate.Release();
@@ -312,9 +352,31 @@ public static class DownloadQueue
     /// <summary>彻底删除某个版本的目录与相关缓存文件。</summary>
     private static void PurgeVersionDirectory(string versionId)
     {
+        // 安全校验：versionId 为空时 Path.Combine 会得到 versions 根目录，
+        // 直接删除会清掉所有版本，必须拦截。
+        if (string.IsNullOrWhiteSpace(versionId) ||
+            versionId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+            versionId.Contains(Path.DirectorySeparatorChar) ||
+            versionId.Contains(Path.AltDirectorySeparatorChar))
+        {
+            Logger.Warn($"拒绝清理版本目录：非法版本 ID「{versionId}」");
+            return;
+        }
+
         try
         {
             var versionDir = Path.Combine(Paths.VersionsDir, versionId);
+            var fullDir = Path.GetFullPath(versionDir);
+            var fullRoot = Path.GetFullPath(Paths.VersionsDir);
+
+            // 目标必须在 versions 目录之内，且不能是 versions 本身
+            if (!fullDir.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(fullDir, fullRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                Logger.Warn($"拒绝清理版本目录：路径越界 {fullDir}");
+                return;
+            }
+
             if (Directory.Exists(versionDir))
             {
                 Directory.Delete(versionDir, true);
@@ -326,6 +388,7 @@ public static class DownloadQueue
             Logger.Warn($"删除版本目录失败 {versionId}: {ex.Message}");
         }
     }
+
     /// <summary>移除已完成 / 失败 / 取消的任务记录。</summary>
     public static void PruneFinished()
     {
@@ -349,5 +412,8 @@ public static class DownloadQueue
         Changed?.Invoke();
     }
 }
+
+
+
 
 

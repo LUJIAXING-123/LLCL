@@ -7,6 +7,15 @@ namespace LLCL.Core.Minecraft;
 /// </summary>
 public static class VersionManager
 {
+    /// <summary>版本集合发生变化（新增 / 删除 / 重命名）时触发，供各界面刷新。</summary>
+    public static event Action? VersionsChanged;
+
+    /// <summary>通知所有订阅者版本列表已变化。</summary>
+    public static void NotifyChanged()
+    {
+        try { VersionsChanged?.Invoke(); }
+        catch (Exception ex) { Logger.Warn($"版本变更通知失败: {ex.Message}"); }
+    }
     /// <summary>扫描全部已安装版本，返回带详细元信息的列表。</summary>
     public static List<VersionEntry> ScanAll()
     {
@@ -236,6 +245,8 @@ public static class VersionManager
                 }
             }
 
+            NotifyChanged();
+
             // 迁移版本设置
             var settingsPath = Path.Combine(newDir, "llcl-version.json");
             if (File.Exists(settingsPath))
@@ -265,7 +276,36 @@ public static class VersionManager
         error = null;
         try
         {
+            // 安全校验：id 为空/非法时 Path.Combine 会得到 versions 根目录本身，
+            // 直接删除会连带清空所有版本，必须提前拦截。
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                error = "版本 ID 为空，已阻止删除操作";
+                Logger.Error($"拒绝删除：版本 ID 为空");
+                return false;
+            }
+
+            if (id.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+                id.Contains(Path.DirectorySeparatorChar) || id.Contains(Path.AltDirectorySeparatorChar))
+            {
+                error = $"版本 ID「{id}」包含非法字符，已阻止删除操作";
+                Logger.Error($"拒绝删除：非法版本 ID {id}");
+                return false;
+            }
+
             var dir = Path.Combine(Paths.VersionsDir, id);
+
+            // 二次校验：目标必须确实位于 versions 目录下，且不能是 versions 本身
+            var fullDir = Path.GetFullPath(dir);
+            var fullRoot = Path.GetFullPath(Paths.VersionsDir);
+            if (!fullDir.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(fullDir, fullRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                error = "目标路径不在版本目录内，已阻止删除操作";
+                Logger.Error($"拒绝删除：路径越界 {fullDir}");
+                return false;
+            }
+
             if (!Directory.Exists(dir))
             {
                 error = "版本不存在";
@@ -273,6 +313,8 @@ public static class VersionManager
             }
 
             Directory.Delete(dir, true);
+            Logger.Info($"已删除版本 {id}");
+            NotifyChanged();
             return true;
         }
         catch (Exception ex)
@@ -356,3 +398,5 @@ public static class VersionManager
         }
     }
 }
+
+
