@@ -120,6 +120,21 @@ Write-Host "  -> $zipName ($zipSize MB)" -ForegroundColor DarkGray
 if (-not $SkipMsix) {
     Write-Host "[5/5] 打包 MSIX 安装包..." -ForegroundColor Green
 
+    # 若存在签名证书则自动签名，否则产出未签名包（测试人员需自行处理信任）
+    $pfxPath = Join-Path $root 'build\certs\llcl-signing.pfx'
+    $signArgs = @('-p:AppxPackageSigningEnabled=false')
+    if (Test-Path $pfxPath) {
+        Write-Host "  使用签名证书: build\certs\llcl-signing.pfx" -ForegroundColor DarkGray
+        $signArgs = @(
+            '-p:AppxPackageSigningEnabled=true'
+            "-p:PackageCertificateKeyFile=$pfxPath"
+            '-p:PackageCertificatePassword=LLCL-Sign-2026'
+            '-p:AppxPackageSigningTimestampDigestAlgorithm=SHA256'
+        )
+    } else {
+        Write-Host "  未找到签名证书，产出未签名的 MSIX（无法直接安装）" -ForegroundColor Yellow
+    }
+
     $msixArgs = @(
         'publish', (Join-Path $root 'src/LLCL.App/LLCL.App.csproj'),
         '-c', 'Release',
@@ -127,29 +142,46 @@ if (-not $SkipMsix) {
         '-p:GenerateAppxPackageOnBuild=true',
         "-p:LlclStage=$Stage",
         "-p:LlclStageNumber=$StageNumber",
-        "-p:AppxPackageDir=$distDir/",
-        '-p:AppxPackageSigningEnabled=false',
-        '--nologo',
-        '-v', 'm'
-    )
+        "-p:AppxPackageDir=$distDir/"
+    ) + $signArgs + @('--nologo', '-v', 'm')
     & dotnet @msixArgs | Out-Host
 
     # MSIX 会输出到 dist\<Name>_<Ver>_<Arch>_Test\ 子目录，需要递归查找并汇总到 dist 根目录
     $msixFiles = Get-ChildItem $distDir -Filter '*.msix' -Recurse -ErrorAction SilentlyContinue
     if ($msixFiles) {
+        $finalMsix = $null
         foreach ($f in $msixFiles) {
             $flatName = "LLCL_${fullVersion}_${Arch}.msix"
             $dest = Join-Path $distDir $flatName
 
             if ($f.FullName -ne $dest) {
                 Move-Item $f.FullName $dest -Force
-                Write-Host "  -> $flatName ($([math]::Round((Get-Item $dest).Length/1MB,1)) MB)" -ForegroundColor DarkGray
             }
+
+            $finalMsix = $dest
+            Write-Host "  -> $flatName ($([math]::Round((Get-Item $dest).Length/1MB,1)) MB)" -ForegroundColor DarkGray
         }
 
         # 清理 MSIX 生成时附带的多语言资源目录
         Get-ChildItem $distDir -Directory -Filter 'LLCL.App_*_Test' -ErrorAction SilentlyContinue |
             Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+        # 签名验证
+        if ($finalMsix -and (Test-Path $pfxPath)) {
+            $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse `
+                -Filter 'signtool.exe' -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+
+            if ($signtool) {
+                & $signtool.FullName verify /pa $finalMsix 2>&1 | Out-Host
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Host "  签名验证通过" -ForegroundColor Green
+                } else {
+                    Write-Host "  签名验证失败：证书尚未安装到受信任存储" -ForegroundColor Yellow
+                    Write-Host "  请以管理员身份运行 build\install-cert.ps1" -ForegroundColor Yellow
+                }
+            }
+        }
     } else {
         Write-Host "  未生成 MSIX（可能缺少打包工具，可加 -SkipMsix 跳过）" -ForegroundColor Yellow
     }
