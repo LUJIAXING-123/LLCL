@@ -28,7 +28,11 @@ $versionFile = Join-Path $PSScriptRoot 'version.json'
 $distDir = Join-Path $root 'dist'
 
 # ---------- 读取版本 ----------
-$versionData = Get-Content $versionFile -Raw | ConvertFrom-Json
+# version.json 顶部带有 # 注释，标准 JSON 解析器不接受；
+# 这里先剔除注释行再解析，同时保留 MSBuild 的正则可兼容性。
+$raw = Get-Content $versionFile -Raw
+$jsonOnly = ($raw -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+$versionData = $jsonOnly | ConvertFrom-Json
 $major = $versionData.major
 $minor = $versionData.minor
 $patch = $versionData.patch
@@ -130,11 +134,22 @@ if (-not $SkipMsix) {
     )
     & dotnet @msixArgs | Out-Host
 
-    $msixFiles = Get-ChildItem $distDir -Filter '*.msix' -ErrorAction SilentlyContinue
+    # MSIX 会输出到 dist\<Name>_<Ver>_<Arch>_Test\ 子目录，需要递归查找并汇总到 dist 根目录
+    $msixFiles = Get-ChildItem $distDir -Filter '*.msix' -Recurse -ErrorAction SilentlyContinue
     if ($msixFiles) {
         foreach ($f in $msixFiles) {
-            Write-Host "  -> $($f.Name) ($([math]::Round($f.Length/1MB,1)) MB)" -ForegroundColor DarkGray
+            $flatName = "LLCL_${fullVersion}_${Arch}.msix"
+            $dest = Join-Path $distDir $flatName
+
+            if ($f.FullName -ne $dest) {
+                Move-Item $f.FullName $dest -Force
+                Write-Host "  -> $flatName ($([math]::Round((Get-Item $dest).Length/1MB,1)) MB)" -ForegroundColor DarkGray
+            }
         }
+
+        # 清理 MSIX 生成时附带的多语言资源目录
+        Get-ChildItem $distDir -Directory -Filter 'LLCL.App_*_Test' -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     } else {
         Write-Host "  未生成 MSIX（可能缺少打包工具，可加 -SkipMsix 跳过）" -ForegroundColor Yellow
     }
