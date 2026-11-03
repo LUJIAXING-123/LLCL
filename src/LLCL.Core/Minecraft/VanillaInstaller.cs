@@ -35,7 +35,9 @@ public static class VanillaInstaller
         var version = VersionLoader.Load(versionId, versionsRoot);
 
         // 2. 客户端 jar
-        var clientJar = Path.Combine(versionsRoot, version.Id, version.Id + ".jar");
+        // 注意：加载器版本（Forge/Fabric 等）通过 inheritsFrom 继承原版的 Downloads.Client，
+        // 此时原版 jar 必须落在「继承链根版本」的目录里，而不是加载器版本目录，
+        // 否则同一个 jar 会在两个版本目录各下一份。
         var items = new List<Net.DownloadItem>();
 
         progress?.Report(("解析文件列表", 0.15));
@@ -108,6 +110,33 @@ public static class VanillaInstaller
         throw new FileNotFoundException($"无法获取版本 {versionId} 的 JSON");
     }
 
+    /// <summary>
+    /// 解析继承链的根版本 ID（原版版本）。
+    /// 加载器版本（Forge/Fabric 等）通过 inheritsFrom 指向原版，
+    /// 根版本才是 jar 与 natives 的归属目录。
+    /// </summary>
+    private static string ResolveRootVersionId(VersionJson version)
+    {
+        var current = version;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { current.Id };
+
+        while (!string.IsNullOrEmpty(current.InheritsFrom))
+        {
+            if (!seen.Add(current.InheritsFrom)) break;
+
+            try
+            {
+                current = VersionLoader.Load(current.InheritsFrom);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"解析继承链失败，停在 {current.Id}: {ex.Message}");
+                break;
+            }
+        }
+
+        return current.Id;
+    }
     /// <summary>收集需要下载的全部文件（客户端 jar、库、资源、资源索引、日志配置）。</summary>
     public static async Task _CollectFilesAsync(VersionJson version, string versionsRoot,
         List<Net.DownloadItem> items, CancellationToken ct)
@@ -118,11 +147,14 @@ public static class VanillaInstaller
                 items.Add(item);
         };
 
-        // 客户端 jar（继承版本也要下载，指向继承链顶层的 jar）
+        // 客户端 jar
+        // 加载器版本的 Downloads.Client 继承自原版，jar 应写入继承链根版本目录，
+        // 与 GameLauncher 的 classpath 解析保持一致，避免重复落盘。
         var clientArtifact = version.Downloads?.Client;
         if (clientArtifact is not null && !string.IsNullOrEmpty(clientArtifact.Url))
         {
-            var target = Path.Combine(versionsRoot, version.Id, version.Id + ".jar");
+            var rootId = ResolveRootVersionId(version);
+            var target = Path.Combine(versionsRoot, rootId, rootId + ".jar");
             add(new Net.DownloadItem
             {
                 Url = clientArtifact.Url,
@@ -239,7 +271,9 @@ public static class VanillaInstaller
     /// <summary>将 natives 包解压到版本目录。</summary>
     public static async Task ExtractNativesAsync(VersionJson version, string versionsRoot, CancellationToken ct)
     {
-        var nativeDir = Path.Combine(versionsRoot, version.Id, "natives");
+        // 与 jar 同理：natives 归属继承链根版本，避免加载器版本重复解压一份
+        var rootId = ResolveRootVersionId(version);
+        var nativeDir = Path.Combine(versionsRoot, rootId, "natives");
         Directory.CreateDirectory(nativeDir);
 
         foreach (var lib in version.Libraries)
@@ -288,6 +322,7 @@ public static class VanillaInstaller
         await Task.CompletedTask.ConfigureAwait(false);
     }
 }
+
 
 
 
