@@ -320,6 +320,9 @@ public static class LoaderInstaller
 
         progress?.Report(($"写入版本 {versionId}", 0.4));
 
+        // 先把加载器 profile 落盘，MakeSelfContained 需要在此基础之上补充原版内容
+        SaveVersion(version, versionId);
+
         // 下载该 profile 新增的库（Fabric API 等基础库）
         progress?.Report(("下载加载器库", 0.5));
         await _DownloadLibrariesAsync(version, p => progress?.Report(("下载加载器库", 0.5 + p * 0.45)), ct)
@@ -589,7 +592,6 @@ public static class LoaderInstaller
     /// </para>
     /// </summary>
     /// <returns>是否成功完成自包含处理。</returns>
-    /// <summary>读取某个版本目录下的版本 JSON，返回可编辑的 JsonObject。</summary>
     private static JsonObject? _TryParseObject(string versionDir)
     {
         try
@@ -606,6 +608,11 @@ public static class LoaderInstaller
             return null;
         }
     }
+    /// <summary>
+    /// 让加载器版本自包含：把原版 jar 与 natives 复制到加载器版本目录，
+    /// 并把原版的 libraries / arguments 合并进版本 JSON，移除 inheritsFrom。
+    /// 处理完成后，即使原版版本被删除，加载器版本仍可独立启动。
+    /// </summary>
     private static bool MakeSelfContained(string loaderVersionId, string mcVersion,
         VersionJson mergedVersion, IProgress<(string step, double ratio)>? progress, CancellationToken ct)
     {
@@ -689,6 +696,14 @@ public static class LoaderInstaller
                     if (combined[key] is null && parentNode[key] is not null)
                         combined[key] = parentNode[key]?.DeepClone();
                 }
+
+                // mainClass：加载器版本一般自带（如 Fabric 的 KnotClient）。
+                // 若子版本没有，必须从原版补齐，否则版本无法启动。
+                if (combined["mainClass"] is null && parentNode["mainClass"] is not null)
+                    combined["mainClass"] = parentNode["mainClass"]?.DeepClone();
+
+                if (combined["type"] is null && parentNode["type"] is not null)
+                    combined["type"] = parentNode["type"]?.DeepClone();
 
                 // libraries 合并：父版本在前，加载器库在后
                 var mergedLibs = new JsonArray();
@@ -786,6 +801,8 @@ public static class LoaderInstaller
         try { File.Delete(path); } catch { }
     }
 }
+
+
 
 
 
