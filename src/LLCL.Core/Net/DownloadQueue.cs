@@ -146,8 +146,21 @@ public static class DownloadQueue
 
         // 串行化：同一时间只跑一个队列任务，避免占满带宽
         var syncing = true;
+        var gateAcquired = false;
 
-        await _runnerGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _runnerGate.WaitAsync(ct).ConfigureAwait(false);
+            gateAcquired = true;
+        }
+        catch (OperationCanceledException)
+        {
+            // 排队期间被取消：任务直接标记为取消，不再进入执行流程
+            task.State = DownloadState.Canceled;
+            _Notify(task);
+            throw;
+        }
+
         try
         {
             var downloader = new FileDownloader();
@@ -185,9 +198,11 @@ public static class DownloadQueue
                     await Task.Delay(500).ConfigureAwait(false);
                     if (!syncing) break;
 
-                    // 优先采样队列自己的下载器；若内部流程新建了下载器则采样 Active
-                    var activeDownloader = FileDownloader.Active ?? downloader;
-                    var snapshot = activeDownloader.Snapshot;
+                    // 只采样队列自己的下载器。
+                    // 不能用 FileDownloader.Active：它是全局静态，会被安装流程中
+                    // 内部创建的临时下载器覆盖；那些实例完成后 Snapshot 不再更新，
+                    // 会让任务进度停在某个值上，表现为"卡在最后阶段"。
+                    var snapshot = downloader.Snapshot;
                     if (snapshot is null) continue;
 
                     task.Ratio = snapshot.Ratio;
@@ -228,10 +243,13 @@ public static class DownloadQueue
             syncing = false;
             task.Cts?.Dispose();
             task.Cts = null;
-            _runnerGate.Release();
 
-            // 终态必须广播一次，否则界面会停留在“下载中”
-            _Notify(task);
+            // 仅在真正持有信号量时才释放，否则会导致计数错乱或永久卡死
+            if (gateAcquired) _runnerGate.Release();
+
+            // 终态必须广播一次，否则界面会停留在"下载中"。
+            // 广播本身可能抛出，需吞掉异常，避免掩盖原始错误或让 finally 中断。
+            try { _Notify(task); } catch (Exception ex) { Logger.Warn($"终态通知失败: {ex.Message}"); }
         }
     }
 
