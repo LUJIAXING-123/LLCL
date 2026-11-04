@@ -19,8 +19,12 @@
         <LangVersion>14</LangVersion>
         <ImplicitUsings>enable</ImplicitUsings>
 
-        <!-- 打包方式：MSIX 安装包 -->
-        <WindowsPackageType>MSIX</WindowsPackageType>
+        <!--
+          不再使用 MSIX 打包：MSIX 容器会重定向文件系统与注册表，
+          WinUI3 自包含模式下启动画面后易崩溃。
+          改为普通 Win32 应用 + WiX 生成的 MSI 安装包。
+        -->
+        <WindowsPackageType>None</WindowsPackageType>
         <AppxPackageSigningEnabled>false</AppxPackageSigningEnabled>
         <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
 
@@ -44,8 +48,8 @@
         <ApplicationIcon>Assets\llcl.ico</ApplicationIcon>
         <EnableDefaultItems>true</EnableDefaultItems>
 
-        <AppxManifest>Package.appxmanifest</AppxManifest>
-        <AppxAutoIncrementPackageRevision>false</AppxAutoIncrementPackageRevision>
+        <!-- 供 MSI 打包脚本读取，不再作为 MSIX 清单 -->
+        <LlclPackageAssetsDir>$(MSBuildThisFileDirectory)PackageAssets</LlclPackageAssetsDir>
     </PropertyGroup>
 
     <!-- 版本号由 build/version.json 驱动 -->
@@ -55,7 +59,6 @@
             <AssemblyVersion>$(_LlclAssemblyVersion)</AssemblyVersion>
             <FileVersion>$(_LlclAssemblyVersion)</FileVersion>
             <InformationalVersion>$(LlclVersion)</InformationalVersion>
-            <AppxPackageVersion>$(_LlclMsixVersion)</AppxPackageVersion>
         </PropertyGroup>
     </Target>
 
@@ -68,7 +71,6 @@
 
     <ItemGroup>
         <Manifest Include="$(ApplicationManifest)" />
-        <Content Include="Package.appxmanifest" />
         <Content Include="PackageAssets\**\*.png" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="Assets\**\*.png" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="Assets\llcl.ico" CopyToOutputDirectory="PreserveNewest" />
