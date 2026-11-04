@@ -167,9 +167,12 @@ public static class DownloadQueue
                 task.CurrentFile = e.CurrentFile;
 
                 // 以下载器实际状态为准，避免 UI 与真实状态不一致
+                var wasPaused = task.State == DownloadState.Paused;
                 task.State = downloader.IsPaused ? DownloadState.Paused : DownloadState.Running;
 
-                _Notify(task);
+                // 状态发生切换时才需要结构刷新，纯进度更新只发进度事件
+                if (wasPaused != (task.State == DownloadState.Paused)) _Notify(task);
+                else _NotifyProgress(task);
             };
 
             // 周期性同步：某些安装流程（如 VanillaInstaller / LoaderInstaller）
@@ -196,7 +199,7 @@ public static class DownloadQueue
                     if (downloader.IsPaused) task.State = DownloadState.Paused;
                     else if (task.State == DownloadState.Paused) task.State = DownloadState.Running;
 
-                    _Notify(task);
+                    _NotifyProgress(task);
                 }
             }, linked.Token);
 
@@ -232,7 +235,18 @@ public static class DownloadQueue
         }
     }
 
-    /// <summary>统一的通知入口：同时触发状态与进度事件，保证界面不会漏更新。</summary>
+    /// <summary>
+    /// 进度更新通知：只触发 <see cref="ProgressUpdated"/>，不触发 <see cref="Changed"/>。
+    /// 进度每 500ms 采样一次，若同时触发 Changed 会让界面反复重建列表而闪烁。
+    /// </summary>
+    private static void _NotifyProgress(DownloadTask task)
+    {
+        try { ProgressUpdated?.Invoke(task); } catch (Exception ex) { Logger.Warn($"下载进度通知失败: {ex.Message}"); }
+    }
+
+    /// <summary>
+    /// 结构性变化通知（新增 / 移除 / 状态切换）：同时触发两个事件。
+    /// </summary>
     private static void _Notify(DownloadTask task)
     {
         try { Changed?.Invoke(); } catch (Exception ex) { Logger.Warn($"下载队列通知失败: {ex.Message}"); }
@@ -412,6 +426,7 @@ public static class DownloadQueue
         Changed?.Invoke();
     }
 }
+
 
 
 

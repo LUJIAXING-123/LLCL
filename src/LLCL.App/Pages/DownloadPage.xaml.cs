@@ -397,14 +397,38 @@ public sealed partial class DownloadPage : Page
             await DownloadQueue.RunAsync($"安装 {CurrentLoaderName()} {loaderVersion}", DownloadTaskKind.Loader,
                 async (_, token) =>
                 {
-                    if (!Directory.Exists(Path.Combine(Paths.VersionsDir, mc)))
+                    // 原版尚未安装时先临时装一份，供加载器读取 jar 与库；
+                    // 加载器版本自包含后会删掉这份临时的原版版本。
+                    var installedMc = Directory.Exists(Path.Combine(Paths.VersionsDir, mc));
+                    var tempVanilla = false;
+
+                    if (!installedMc)
                     {
                         ProgressText.Text = "正在下载原版游戏…";
                         await VanillaInstaller.InstallAsync(mc, Paths.VersionsDir, progress, token);
+                        tempVanilla = true;
                     }
 
                     newId = await LoaderInstaller.InstallAsync(CurrentLoaderKind(), mc, loaderVersion,
                         progress, token);
+
+                    // 加载器版本已自带 jar 与 natives，临时原版不再需要
+                    if (tempVanilla)
+                    {
+                        try
+                        {
+                            var mcDir = Path.Combine(Paths.VersionsDir, mc);
+                            if (Directory.Exists(mcDir))
+                            {
+                                Directory.Delete(mcDir, true);
+                                Logger.Info($"已删除临时原版版本 {mc}（加载器版本已自包含）");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Warn($"删除临时原版版本失败: {ex.Message}");
+                        }
+                    }
                 }, cts.Token, mc);
 
             ProgressText.Text = $"✓ {newId} 安装完成";
@@ -718,17 +742,39 @@ public sealed partial class DownloadPage : Page
 
     private void RefreshTasks()
     {
-        _tasks.Clear();
-        foreach (var task in DownloadQueue.Tasks)
+        // 增量同步，避免每次刷新都 Clear 重建整张列表：
+        // 队列每 500ms 广播一次进度，清空重建会让 ListView 反复重绘而闪烁。
+
+        var source = DownloadQueue.Tasks;
+
+        // 移除队列中已不存在的任务
+        for (var i = _tasks.Count - 1; i >= 0; i--)
         {
-            _tasks.Add(new TaskCard
+            if (!source.Any(t => t.Id == _tasks[i].Id))
+                _tasks.RemoveAt(i);
+        }
+
+        // 更新已有任务 / 追加新任务
+        foreach (var task in source)
+        {
+            var card = _tasks.FirstOrDefault(t => t.Id == task.Id);
+            if (card is null)
             {
-                Id = task.Id,
-                Title = task.Title,
-                Detail = task.ProgressText,
-                State = task.StateText,
-                Ratio = task.Ratio
-            });
+                _tasks.Add(new TaskCard
+                {
+                    Id = task.Id,
+                    Title = task.Title,
+                    Detail = task.ProgressText,
+                    State = task.StateText,
+                    Ratio = task.Ratio
+                });
+            }
+            else
+            {
+                card.Detail = task.ProgressText;
+                card.State = task.StateText;
+                card.Ratio = task.Ratio;
+            }
         }
 
         SyncActiveProgress();
