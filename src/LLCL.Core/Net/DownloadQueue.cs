@@ -146,21 +146,8 @@ public static class DownloadQueue
 
         // 串行化：同一时间只跑一个队列任务，避免占满带宽
         var syncing = true;
-        var gateAcquired = false;
 
-        try
-        {
-            await _runnerGate.WaitAsync(ct).ConfigureAwait(false);
-            gateAcquired = true;
-        }
-        catch (OperationCanceledException)
-        {
-            // 排队期间被取消：任务直接标记为取消，不再进入执行流程
-            task.State = DownloadState.Canceled;
-            _Notify(task);
-            throw;
-        }
-
+        await _runnerGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             var downloader = new FileDownloader();
@@ -180,12 +167,9 @@ public static class DownloadQueue
                 task.CurrentFile = e.CurrentFile;
 
                 // 以下载器实际状态为准，避免 UI 与真实状态不一致
-                var wasPaused = task.State == DownloadState.Paused;
                 task.State = downloader.IsPaused ? DownloadState.Paused : DownloadState.Running;
 
-                // 状态发生切换时才需要结构刷新，纯进度更新只发进度事件
-                if (wasPaused != (task.State == DownloadState.Paused)) _Notify(task);
-                else _NotifyProgress(task);
+                _Notify(task);
             };
 
             // 周期性同步：某些安装流程（如 VanillaInstaller / LoaderInstaller）
@@ -198,11 +182,9 @@ public static class DownloadQueue
                     await Task.Delay(500).ConfigureAwait(false);
                     if (!syncing) break;
 
-                    // 只采样队列自己的下载器。
-                    // 不能用 FileDownloader.Active：它是全局静态，会被安装流程中
-                    // 内部创建的临时下载器覆盖；那些实例完成后 Snapshot 不再更新，
-                    // 会让任务进度停在某个值上，表现为"卡在最后阶段"。
-                    var snapshot = downloader.Snapshot;
+                    // 优先采样队列自己的下载器；若内部流程新建了下载器则采样 Active
+                    var activeDownloader = FileDownloader.Active ?? downloader;
+                    var snapshot = activeDownloader.Snapshot;
                     if (snapshot is null) continue;
 
                     task.Ratio = snapshot.Ratio;
@@ -214,7 +196,7 @@ public static class DownloadQueue
                     if (downloader.IsPaused) task.State = DownloadState.Paused;
                     else if (task.State == DownloadState.Paused) task.State = DownloadState.Running;
 
-                    _NotifyProgress(task);
+                    _Notify(task);
                 }
             }, linked.Token);
 
@@ -243,28 +225,14 @@ public static class DownloadQueue
             syncing = false;
             task.Cts?.Dispose();
             task.Cts = null;
+            _runnerGate.Release();
 
-            // 仅在真正持有信号量时才释放，否则会导致计数错乱或永久卡死
-            if (gateAcquired) _runnerGate.Release();
-
-            // 终态必须广播一次，否则界面会停留在"下载中"。
-            // 广播本身可能抛出，需吞掉异常，避免掩盖原始错误或让 finally 中断。
-            try { _Notify(task); } catch (Exception ex) { Logger.Warn($"终态通知失败: {ex.Message}"); }
+            // 终态必须广播一次，否则界面会停留在“下载中”
+            _Notify(task);
         }
     }
 
-    /// <summary>
-    /// 进度更新通知：只触发 <see cref="ProgressUpdated"/>，不触发 <see cref="Changed"/>。
-    /// 进度每 500ms 采样一次，若同时触发 Changed 会让界面反复重建列表而闪烁。
-    /// </summary>
-    private static void _NotifyProgress(DownloadTask task)
-    {
-        try { ProgressUpdated?.Invoke(task); } catch (Exception ex) { Logger.Warn($"下载进度通知失败: {ex.Message}"); }
-    }
-
-    /// <summary>
-    /// 结构性变化通知（新增 / 移除 / 状态切换）：同时触发两个事件。
-    /// </summary>
+    /// <summary>统一的通知入口：同时触发状态与进度事件，保证界面不会漏更新。</summary>
     private static void _Notify(DownloadTask task)
     {
         try { Changed?.Invoke(); } catch (Exception ex) { Logger.Warn($"下载队列通知失败: {ex.Message}"); }
@@ -444,7 +412,6 @@ public static class DownloadQueue
         Changed?.Invoke();
     }
 }
-
 
 
 

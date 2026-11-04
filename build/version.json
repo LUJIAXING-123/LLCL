@@ -21,8 +21,8 @@
 {
   "major": 0,
   "minor": 1,
-  "patch": 1,
-  "stage": "dev",
+  "patch": 0,
+  "stage": "beta",
   "stageNumber": 1,
   "productName": "LL Craft Launcher",
   "productShortName": "LLCL",

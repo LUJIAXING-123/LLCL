@@ -320,18 +320,12 @@ public static class LoaderInstaller
 
         progress?.Report(($"写入版本 {versionId}", 0.4));
 
-        // 先把加载器 profile 落盘，MakeSelfContained 需要在此基础之上补充原版内容
         SaveVersion(version, versionId);
 
         // 下载该 profile 新增的库（Fabric API 等基础库）
         progress?.Report(("下载加载器库", 0.5));
         await _DownloadLibrariesAsync(version, p => progress?.Report(("下载加载器库", 0.5 + p * 0.45)), ct)
             .ConfigureAwait(false);
-
-        // 关键：把原版 jar / natives 复制到加载器版本，并移除 inheritsFrom 依赖，
-        // 使加载器版本可以独立启动，不再依赖原版版本目录。
-        var merged = VersionLoader.Merge(VersionLoader.Load(mcVersion), version);
-        MakeSelfContained(versionId, mcVersion, merged, progress, ct);
 
         progress?.Report(("安装完成", 1.0));
         return versionId;
@@ -535,17 +529,6 @@ public static class LoaderInstaller
                          c.Contains(loaderVersion, StringComparison.OrdinalIgnoreCase)))
                     ?? throw new IOException($"{label} 安装完成但未找到版本目录（期望 {expected}）");
 
-        // 与 Fabric 一致：让安装器产出的版本自包含，摆脱对原版目录的依赖
-        try
-        {
-            var installed = VersionLoader.Load(match);
-            MakeSelfContained(match, mcVersion, installed, progress, ct);
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"{label} 自包含处理失败（仍可通过 inheritsFrom 启动）: {ex.Message}");
-        }
-
         progress?.Report(("安装完成", 1.0));
         return match;
     }
@@ -584,182 +567,6 @@ public static class LoaderInstaller
             _ => loaderName
         };
 
-    /// <summary>
-    /// 让加载器版本自包含：把原版 jar 与 natives 复制到加载器版本目录，
-    /// 并修正版本 JSON 使其不再依赖 inheritsFrom。
-    /// <para>
-    /// 这样即使原版版本被删除，加载器版本仍能独立启动。
-    /// </para>
-    /// </summary>
-    /// <returns>是否成功完成自包含处理。</returns>
-    private static JsonObject? _TryParseObject(string versionDir)
-    {
-        try
-        {
-            var id = Path.GetFileName(versionDir.TrimEnd(Path.DirectorySeparatorChar));
-            var path = Path.Combine(versionDir, id + ".json");
-            if (!File.Exists(path)) return null;
-
-            return JsonNode.Parse(File.ReadAllText(path)) as JsonObject;
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"解析版本 JSON 失败 {versionDir}: {ex.Message}");
-            return null;
-        }
-    }
-    /// <summary>
-    /// 让加载器版本自包含：把原版 jar 与 natives 复制到加载器版本目录，
-    /// 并把原版的 libraries / arguments 合并进版本 JSON，移除 inheritsFrom。
-    /// 处理完成后，即使原版版本被删除，加载器版本仍可独立启动。
-    /// </summary>
-    private static bool MakeSelfContained(string loaderVersionId, string mcVersion,
-        VersionJson mergedVersion, IProgress<(string step, double ratio)>? progress, CancellationToken ct)
-    {
-        try
-        {
-            progress?.Report(("让加载器版本自包含", 0.9));
-
-            var mcDir = Path.Combine(Paths.VersionsDir, mcVersion);
-            var loaderDir = Path.Combine(Paths.VersionsDir, loaderVersionId);
-            Directory.CreateDirectory(loaderDir);
-
-            // 1. 复制原版 jar
-            // 优先取原版版本目录；若无（例如 Forge 安装器直接产出合并版），
-            // 回退到加载器版本目录里已存在的 jar。
-            var srcJar = Path.Combine(mcDir, mcVersion + ".jar");
-            if (!File.Exists(srcJar))
-            {
-                var localJar = Path.Combine(loaderDir, loaderVersionId + ".jar");
-                if (File.Exists(localJar))
-                {
-                    Logger.Info($"原版目录无 jar，沿用加载器目录内已有 jar: {localJar}");
-                    srcJar = localJar;
-                }
-            }
-
-            var dstJar = Path.Combine(loaderDir, loaderVersionId + ".jar");
-
-            if (File.Exists(srcJar))
-            {
-                if (srcJar != dstJar &&
-                    (!File.Exists(dstJar) || new FileInfo(dstJar).Length != new FileInfo(srcJar).Length))
-                {
-                    File.Copy(srcJar, dstJar, true);
-                    Logger.Info($"复制原版 jar → {loaderVersionId}");
-                }
-            }
-            else
-            {
-                Logger.Warn($"原版 jar 不存在，加载器版本无法自包含: {srcJar}");
-                return false;
-            }
-
-            // 2. 复制 natives
-            var srcNatives = Path.Combine(mcDir, "natives");
-            var dstNatives = Path.Combine(loaderDir, "natives");
-            if (Directory.Exists(srcNatives))
-            {
-                Directory.CreateDirectory(dstNatives);
-                foreach (var file in Directory.GetFiles(srcNatives))
-                {
-                    var target = Path.Combine(dstNatives, Path.GetFileName(file));
-                    if (!File.Exists(target) ||
-                        new FileInfo(target).Length != new FileInfo(file).Length)
-                    {
-                        File.Copy(file, target, true);
-                    }
-                }
-                Logger.Info($"复制 natives → {loaderVersionId}");
-            }
-
-            // 3. 重写 JSON：移除 inheritsFrom，改为完全自包含
-            // 直接从父版本与子版本的原始 JSON 节点拼接，而不是序列化 VersionJson 对象。
-            // 原因：VersionJson.Arguments 是 List<object>，经序列化/反序列化后
-            // 元素会退化为 JsonElement，导致 ArgumentEvaluator 无法识别而破坏启动参数。
-            var jsonPath = Path.Combine(loaderDir, loaderVersionId + ".json");
-
-            var parentNode = _TryParseObject(mcDir);
-            var childNode = _TryParseObject(loaderDir);
-
-            var combined = childNode ?? new JsonObject();
-
-            // 移除继承依赖
-            combined.Remove("inheritsFrom");
-            combined["id"] = loaderVersionId;
-
-            // 原版缺少的字段从父版本补齐
-            if (parentNode is not null)
-            {
-                foreach (var key in new[] { "assets", "assetIndex", "downloads", "javaVersion", "logging" })
-                {
-                    if (combined[key] is null && parentNode[key] is not null)
-                        combined[key] = parentNode[key]?.DeepClone();
-                }
-
-                // mainClass：加载器版本一般自带（如 Fabric 的 KnotClient）。
-                // 若子版本没有，必须从原版补齐，否则版本无法启动。
-                if (combined["mainClass"] is null && parentNode["mainClass"] is not null)
-                    combined["mainClass"] = parentNode["mainClass"]?.DeepClone();
-
-                if (combined["type"] is null && parentNode["type"] is not null)
-                    combined["type"] = parentNode["type"]?.DeepClone();
-
-                // libraries 合并：父版本在前，加载器库在后
-                var mergedLibs = new JsonArray();
-                if (parentNode["libraries"] is JsonArray parentLibs)
-                    foreach (var lib in parentLibs)
-                        mergedLibs.Add(lib?.DeepClone());
-
-                if (combined["libraries"] is JsonArray childLibs)
-                    foreach (var lib in childLibs.ToList())
-                        mergedLibs.Add(lib?.DeepClone());
-
-                combined["libraries"] = mergedLibs;
-
-                // arguments 合并：父版本在前，子版本在后，保持原始结构
-                var mergedArgs = new JsonObject();
-
-                foreach (var side in new[] { "game", "jvm" })
-                {
-                    var arr = new JsonArray();
-                    if (parentNode["arguments"]?[side] is JsonArray parentArr)
-                        foreach (var item in parentArr)
-                            arr.Add(item?.DeepClone());
-
-                    if (combined["arguments"]?[side] is JsonArray childArr)
-                        foreach (var item in childArr.ToList())
-                            arr.Add(item?.DeepClone());
-
-                    if (arr.Count > 0) mergedArgs[side] = arr;
-                }
-
-                if (mergedArgs.Count > 0)
-                    combined["arguments"] = mergedArgs;
-
-                // 旧版格式的 minecraftArguments
-                if (combined["minecraftArguments"] is null &&
-                    parentNode["minecraftArguments"] is JsonValue legacyArgs)
-                    combined["minecraftArguments"] = legacyArgs.DeepClone();
-            }
-
-            File.WriteAllText(jsonPath, combined.ToJsonString(new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-            }));
-
-            var libCount = combined["libraries"] is JsonArray finalLibs ? finalLibs.Count : 0;
-            Logger.Info($"加载器版本已自包含: {loaderVersionId}" +
-                        $"（{libCount} 个库，mainClass={combined["mainClass"]}）");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Logger.Error(ex, $"加载器版本自包含处理失败 {loaderVersionId}");
-            return false;
-        }
-    }
     /// <summary>保存版本 JSON（同时修正 id 字段）。</summary>
     public static void SaveVersion(VersionJson version, string versionId)
     {
@@ -801,10 +608,6 @@ public static class LoaderInstaller
         try { File.Delete(path); } catch { }
     }
 }
-
-
-
-
 
 
 

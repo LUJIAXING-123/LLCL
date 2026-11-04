@@ -380,47 +380,6 @@ public sealed partial class DownloadPage : Page
         if (_loaded && _section == "loader") _ = LoadLoaderVersionsAsync();
     }
 
-    /// <summary>
-    /// 确认加载器版本已自包含（存在 jar 且 JSON 无 inheritsFrom）后，
-    /// 删除作为依赖的原版版本目录。任一条件不满足则保留，避免误删导致无法启动。
-    /// </summary>
-    private static void DeleteVanillaIfSelfContained(string mcDir, string mcVersion, string loaderVersionId)
-    {
-        try
-        {
-            var loaderDir = Path.Combine(Paths.VersionsDir, loaderVersionId);
-            var loaderJar = Path.Combine(loaderDir, loaderVersionId + ".jar");
-            var loaderJson = Path.Combine(loaderDir, loaderVersionId + ".json");
-
-            if (!File.Exists(loaderJar))
-            {
-                Logger.Warn($"加载器版本缺少 jar，保留原版 {mcVersion}");
-                return;
-            }
-
-            if (!File.Exists(loaderJson))
-            {
-                Logger.Warn($"加载器版本缺少 JSON，保留原版 {mcVersion}");
-                return;
-            }
-
-            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(loaderJson));
-            if (doc.RootElement.TryGetProperty("inheritsFrom", out _))
-            {
-                Logger.Warn($"加载器版本仍依赖 inheritsFrom，保留原版 {mcVersion}");
-                return;
-            }
-
-            if (!Directory.Exists(mcDir)) return;
-
-            Directory.Delete(mcDir, true);
-            Logger.Info($"已删除作为依赖的原版版本 {mcVersion}（{loaderVersionId} 已自包含）");
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"删除原版版本 {mcVersion} 失败: {ex.Message}");
-        }
-    }
     private async void InstallLoader_Click(object sender, RoutedEventArgs e)
     {
         var mc = McVersionCombo.SelectedItem as string;
@@ -438,25 +397,14 @@ public sealed partial class DownloadPage : Page
             await DownloadQueue.RunAsync($"安装 {CurrentLoaderName()} {loaderVersion}", DownloadTaskKind.Loader,
                 async (_, token) =>
                 {
-                    // 原版尚未安装时先临时装一份，供加载器读取 jar 与库。
-                    // 安装完成后若加载器版本已自包含，则删除这份原版。
-                    var mcDir = Path.Combine(Paths.VersionsDir, mc);
-                    var installedMc = Directory.Exists(mcDir);
-                    var tempVanilla = false;
-
-                    if (!installedMc)
+                    if (!Directory.Exists(Path.Combine(Paths.VersionsDir, mc)))
                     {
                         ProgressText.Text = "正在下载原版游戏…";
                         await VanillaInstaller.InstallAsync(mc, Paths.VersionsDir, progress, token);
-                        tempVanilla = true;
                     }
 
                     newId = await LoaderInstaller.InstallAsync(CurrentLoaderKind(), mc, loaderVersion,
                         progress, token);
-
-                    // 加载器版本自包含后，原版仅作为依赖存在，按需求删除。
-                    // 用户手动安装的原版不删（只有本次临时安装的才删）。
-                    if (tempVanilla) DeleteVanillaIfSelfContained(mcDir, mc, newId);
                 }, cts.Token, mc);
 
             ProgressText.Text = $"✓ {newId} 安装完成";
@@ -770,39 +718,17 @@ public sealed partial class DownloadPage : Page
 
     private void RefreshTasks()
     {
-        // 增量同步，避免每次刷新都 Clear 重建整张列表：
-        // 队列每 500ms 广播一次进度，清空重建会让 ListView 反复重绘而闪烁。
-
-        var source = DownloadQueue.Tasks;
-
-        // 移除队列中已不存在的任务
-        for (var i = _tasks.Count - 1; i >= 0; i--)
+        _tasks.Clear();
+        foreach (var task in DownloadQueue.Tasks)
         {
-            if (!source.Any(t => t.Id == _tasks[i].Id))
-                _tasks.RemoveAt(i);
-        }
-
-        // 更新已有任务 / 追加新任务
-        foreach (var task in source)
-        {
-            var card = _tasks.FirstOrDefault(t => t.Id == task.Id);
-            if (card is null)
+            _tasks.Add(new TaskCard
             {
-                _tasks.Add(new TaskCard
-                {
-                    Id = task.Id,
-                    Title = task.Title,
-                    Detail = task.ProgressText,
-                    State = task.StateText,
-                    Ratio = task.Ratio
-                });
-            }
-            else
-            {
-                card.Detail = task.ProgressText;
-                card.State = task.StateText;
-                card.Ratio = task.Ratio;
-            }
+                Id = task.Id,
+                Title = task.Title,
+                Detail = task.ProgressText,
+                State = task.StateText,
+                Ratio = task.Ratio
+            });
         }
 
         SyncActiveProgress();
@@ -918,10 +844,6 @@ public sealed partial class DownloadPage : Page
     private IProgress<(string step, double ratio)> MakeProgress() =>
         new Progress<(string step, double ratio)>(p =>
         {
-            // 任务结束后可能仍有排队的回调到达 UI 线程，
-            // 此时进度条与文案已收尾，忽略这些滞后更新，避免界面被拉回"进行中"。
-            if (!_busy) return;
-
             DownloadProgress.Value = Math.Clamp(p.ratio, 0, 1);
             ProgressText.Text = p.step;
         });
@@ -1032,7 +954,6 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
-
 
 
 
