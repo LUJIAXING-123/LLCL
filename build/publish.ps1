@@ -136,7 +136,6 @@ if (-not $SkipMsix) {
     } else {
         Write-Host "  未生成 MSI，请检查 WiX 工具链" -ForegroundColor Yellow
     }
-    }
 } else {
     Write-Host "[5/5] 跳过安装包（-SkipMsix）" -ForegroundColor DarkGray
 }
