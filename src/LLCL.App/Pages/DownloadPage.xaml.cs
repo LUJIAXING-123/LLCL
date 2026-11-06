@@ -718,17 +718,39 @@ public sealed partial class DownloadPage : Page
 
     private void RefreshTasks()
     {
-        _tasks.Clear();
-        foreach (var task in DownloadQueue.Tasks)
+        // 增量同步，避免每次刷新都 Clear 重建整张列表：
+        // 队列每 500ms 广播一次进度，清空重建会让 ListView 反复重绘而闪烁。
+
+        var source = DownloadQueue.Tasks;
+
+        // 移除队列中已不存在的任务
+        for (var i = _tasks.Count - 1; i >= 0; i--)
         {
-            _tasks.Add(new TaskCard
+            if (!source.Any(t => t.Id == _tasks[i].Id))
+                _tasks.RemoveAt(i);
+        }
+
+        // 更新已有任务 / 追加新任务
+        foreach (var task in source)
+        {
+            var card = _tasks.FirstOrDefault(t => t.Id == task.Id);
+            if (card is null)
             {
-                Id = task.Id,
-                Title = task.Title,
-                Detail = task.ProgressText,
-                State = task.StateText,
-                Ratio = task.Ratio
-            });
+                _tasks.Add(new TaskCard
+                {
+                    Id = task.Id,
+                    Title = task.Title,
+                    Detail = task.ProgressText,
+                    State = task.StateText,
+                    Ratio = task.Ratio
+                });
+            }
+            else
+            {
+                card.Detail = task.ProgressText;
+                card.State = task.StateText;
+                card.Ratio = task.Ratio;
+            }
         }
 
         SyncActiveProgress();

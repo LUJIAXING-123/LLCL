@@ -63,6 +63,30 @@ Write-Host " 架构: $Arch" -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
+# ---------- dev 阶段：只编译，不产出安装包 ----------
+# dev 为内部测试版，不分发；产物留在 bin 目录直接运行即可。
+if ($Stage -eq 'dev') {
+    Write-Host "dev 阶段不生成安装包与绿色包，仅编译到 bin 目录。" -ForegroundColor Yellow
+    Write-Host ""
+
+    $buildOnly = @(
+        'build', (Join-Path $root 'src/LLCL.App/LLCL.App.csproj'),
+        '-c', 'Release',
+        "-p:Platform=$Arch",
+        "-p:LlclStage=$Stage",
+        "-p:LlclStageNumber=$StageNumber",
+        '--nologo'
+    )
+    & dotnet @buildOnly | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "编译失败" }
+
+    $binDir = Join-Path $root "src/LLCL.App/bin/$Arch/Release/net10.0-windows10.0.26100.0/win-x64"
+    Write-Host ""
+    Write-Host "完成。可直接运行:" -ForegroundColor Green
+    Write-Host "  $binDir\LLCL.exe" -ForegroundColor Cyan
+    exit 0
+}
+
 New-Item -ItemType Directory -Force $distDir | Out-Null
 
 # ---------- 1. 生成图标（有源图时） ----------
