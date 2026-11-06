@@ -380,6 +380,51 @@ public sealed partial class DownloadPage : Page
         if (_loaded && _section == "loader") _ = LoadLoaderVersionsAsync();
     }
 
+    /// <summary>
+    /// 删除已无作用的原版版本目录。
+    /// <para>
+    /// 删除前必须确认加载器版本确实自包含：
+    /// 存在同名 jar、且版本 JSON 中不含 inheritsFrom。
+    /// 任一条件不满足就保留原版，避免误删导致加载器版本无法启动。
+    /// </para>
+    /// </summary>
+    private static void DeleteVanillaIfRedundant(string mcDir, string mcVersion, string loaderVersionId)
+    {
+        try
+        {
+            var loaderDir = Path.Combine(Paths.VersionsDir, loaderVersionId);
+            var loaderJar = Path.Combine(loaderDir, loaderVersionId + ".jar");
+            var loaderJson = Path.Combine(loaderDir, loaderVersionId + ".json");
+
+            if (!File.Exists(loaderJar))
+            {
+                Logger.Warn($"加载器版本缺少 jar，保留原版 {mcVersion}");
+                return;
+            }
+
+            if (!File.Exists(loaderJson))
+            {
+                Logger.Warn($"加载器版本缺少 JSON，保留原版 {mcVersion}");
+                return;
+            }
+
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(loaderJson));
+            if (doc.RootElement.TryGetProperty("inheritsFrom", out _))
+            {
+                Logger.Warn($"加载器版本仍依赖 inheritsFrom，保留原版 {mcVersion}");
+                return;
+            }
+
+            if (!Directory.Exists(mcDir)) return;
+
+            Directory.Delete(mcDir, true);
+            Logger.Info($"已删除冗余原版版本 {mcVersion}（{loaderVersionId} 已自包含）");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"删除原版版本 {mcVersion} 失败: {ex.Message}");
+        }
+    }
     private async void InstallLoader_Click(object sender, RoutedEventArgs e)
     {
         var mc = McVersionCombo.SelectedItem as string;
@@ -397,14 +442,28 @@ public sealed partial class DownloadPage : Page
             await DownloadQueue.RunAsync($"安装 {CurrentLoaderName()} {loaderVersion}", DownloadTaskKind.Loader,
                 async (_, token) =>
                 {
-                    if (!Directory.Exists(Path.Combine(Paths.VersionsDir, mc)))
+                    // 原版未安装时先临时装一份，供加载器读取 jar 与 libraries；
+                    // 加载器版本自包含后，这份原版即成为冗余，安装成功后清理。
+                    var mcDir = Path.Combine(Paths.VersionsDir, mc);
+                    var installedMc = Directory.Exists(mcDir);
+                    var tempVanilla = false;
+
+                    if (!installedMc)
                     {
                         ProgressText.Text = "正在下载原版游戏…";
                         await VanillaInstaller.InstallAsync(mc, Paths.VersionsDir, progress, token);
+                        tempVanilla = true;
                     }
 
                     newId = await LoaderInstaller.InstallAsync(CurrentLoaderKind(), mc, loaderVersion,
                         progress, token);
+
+                    // 仅当原版是本次临时安装、且加载器版本确认已自包含时才删除
+                    if (tempVanilla)
+                    {
+                        ProgressText.Text = "清理临时原版…";
+                        DeleteVanillaIfRedundant(mcDir, mc, newId);
+                    }
                 }, cts.Token, mc);
 
             ProgressText.Text = $"✓ {newId} 安装完成";
@@ -976,6 +1035,7 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
 
 
 
