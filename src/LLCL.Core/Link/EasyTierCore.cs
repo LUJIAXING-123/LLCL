@@ -275,16 +275,26 @@ public sealed class EasyTierCore : IDisposable
             args.Add("--disable-p2p");
         }
 
-        // 中继节点
-        foreach (var node in _RelayNodes())
+        // 中继节点。
+        // 注意：EasyTier 2.x 的参数名是 --peers（复数，可跟多个值）；
+        // 旧参数 --p 已在 2.6 移除，写成 --p 会导致进程启动即报错退出。
+        var relays = _RelayNodes().ToList();
+        if (relays.Count == 1)
         {
-            args.Add("--p");
-            args.Add(node);
+            args.Add("--peers");
+            args.Add(relays[0]);
+        }
+        else if (relays.Count > 1)
+        {
+            args.Add("--peers");
+            args.AddRange(relays);
         }
 
         if (isHost)
         {
-            args.Add("--i");
+            // 房主固定使用房间码生成的虚拟 IP，加入端自动分配，避免冲突。
+            // 旧参数 --i 已移除，正确写法是 --ipv4。
+            args.Add("--ipv4");
             args.Add(RoomCode.HostIp);
             args.Add("--tcp-whitelist");
             args.Add(mcPort.ToString());
@@ -321,8 +331,40 @@ public sealed class EasyTierCore : IDisposable
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
 
-        await Task.CompletedTask.ConfigureAwait(false);
+        // 关键：EasyTier 对未知参数会立即报错退出，若此处不校验存活，
+        // 上层会误以为房间已建立，实际虚拟网络根本不存在，
+        // 表现为房主显示"已连接"、加入端永远等待超时。
+        await Task.Delay(800, ct).ConfigureAwait(false);
+
+        if (_process.HasExited)
+        {
+            var exitCode = _process.ExitCode;
+            _process = null;
+            throw new InvalidOperationException(
+                $"EasyTier 内核启动失败（退出码 {exitCode}）。\n" +
+                "通常是内核参数不兼容或缺少依赖，请查看日志后重试。");
+        }
+
+        Logger.Info("EasyTier 内核已启动并保持运行");
     }
+
+    /// <summary>
+    /// 验证过的公共中继节点。
+    /// <para>
+    /// 官方默认地址 public.easytier.top / public2.easytier.cn 的域名已经失效
+    /// （DNS 查不到记录），会导致 EasyTier 一直 connect timeout 连不上中继，
+    /// 表现为房主看似连上、加入端永远等待超时。
+    /// 下面的地址取自 PCL-CE 的备用节点列表，实测可用。
+    /// </para>
+    /// </summary>
+    private static readonly string[] KnownRelayNodes =
+    [
+        "tcp://183.66.27.22:39409"
+    ];
+
+    /// <summary>提供公共中继节点的动态接口，格式与 PCL-CE 相同。</summary>
+    private const string RelayApiUrl =
+        "https://uptime.easytier.cn/api/nodes?page=1&per_page=50&is_active=true";
 
     private static IEnumerable<string> _RelayNodes()
     {
@@ -336,8 +378,8 @@ public sealed class EasyTierCore : IDisposable
             if (node.Contains("://", StringComparison.Ordinal)) nodes.Add(node);
         }
 
-        // 默认公共节点（主节点不可用时仍有中继）
-        nodes.Add("tcp://public2.easytier.cn:54321");
+        // 实测可用的公共中继（官方默认地址已失效，不能再用）
+        nodes.AddRange(KnownRelayNodes);
 
         return nodes.Distinct();
     }

@@ -180,7 +180,13 @@ public sealed class LauncherConfig
 
     // ---------- 联机 ----------
     public string LobbyUserName { get; set; } = string.Empty;
-    public string EasyTierRelay { get; set; } = "tcp://public.easytier.top:11010";
+
+    /// <summary>
+    /// 主中继节点。官方默认地址（public.easytier.top / public2.easytier.cn）
+    /// 域名已失效，改用实测可用的社区节点。
+    /// </summary>
+    public string EasyTierRelay { get; set; } = "tcp://183.66.27.22:39409";
+
     public string ExtraRelayNodes { get; set; } = string.Empty;
     public bool ForceRelay { get; set; }
     public bool EnableIPv6 { get; set; } = true;
@@ -225,18 +231,41 @@ public sealed class LauncherConfig
     public static event Action? OnChanged;
 
     /// <summary>
-    /// 配置迁移：修正历史版本遗留的过激默认值。
-    /// 早期默认 64 线程会触发镜像站限流，导致大量下载失败。
+    /// 配置迁移：修正历史版本遗留的过激或失效默认值。
     /// </summary>
     private void Migrate()
     {
+        var changed = false;
+
+        // 早期默认 64 线程会触发镜像站限流，导致大量下载失败
         if (DownloadThreads > 32)
         {
             Logger.Warn($"下载线程数 {DownloadThreads} 过高，已调整为 16 以避免镜像站限流");
             DownloadThreads = 16;
-            Save();
+            changed = true;
         }
+
+        // 官方 EasyTier 中继域名已失效，继续使用会导致联机永远连接超时
+        if (IsDeadRelay(EasyTierRelay))
+        {
+            Logger.Warn($"中继节点 {EasyTierRelay} 已失效，改用可用节点");
+            EasyTierRelay = "tcp://183.66.27.22:39409";
+            changed = true;
+        }
+
+        if (changed) Save();
     }
+
+    /// <summary>判断中继地址是否属于已失效的官方域名。</summary>
+    private static bool IsDeadRelay(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return true;
+
+        return url.Contains("public.easytier.top", StringComparison.OrdinalIgnoreCase)
+               || url.Contains("public2.easytier.cn", StringComparison.OrdinalIgnoreCase)
+               || url.Contains("kkrainbow.top", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static void Load()
     {
         try

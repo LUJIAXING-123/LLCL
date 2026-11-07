@@ -26,14 +26,16 @@ public sealed class LanBroadcaster : IDisposable
 
         try
         {
-            _client = new UdpClient();
+            // 先绑定到随机端口，否则部分 SocketOption 在未绑定状态下会报
+            // 「提供了一个无效的参数」(WSAEINVAL)。
+            _client = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
             _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.MulticastTimeToLive, 4);
             _client.EnableBroadcast = true;
         }
         catch (Exception ex)
         {
             Logger.Warn($"创建局域网广播失败: {ex.Message}");
+            _client = null;
             return;
         }
 
