@@ -87,8 +87,18 @@ public sealed class GameLauncher
         args.Add($"-Djava.library.path={Path.Combine(Paths.VersionsDir, rootId, "natives")}");
         args.Add("-Dminecraft.launcher.brand=LLCL");
         args.Add("-Dminecraft.launcher.version=3.0");
-        args.Add("-cp");
-        args.Add(placeholder["classpath"]);
+
+        // 版本自带的 jvm 参数通常已经包含 -cp 与 classpath，
+        // 此时手动再加一次会导致命令行出现两个 -cp，游戏可能读到错误的那个。
+        var hasClasspathInArguments =
+            version.Arguments?.Jvm.Any(o => o is string s &&
+                (s == "-cp" || s == "--class-path")) ?? false;
+
+        if (!hasClasspathInArguments)
+        {
+            args.Add("-cp");
+            args.Add(placeholder["classpath"]);
+        }
 
         if (version.Arguments is not null)
         {

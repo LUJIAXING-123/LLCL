@@ -253,28 +253,96 @@ public sealed partial class SettingsPage : Page
     {
         panel.Children.Add(Header("下载"));
 
-        var combo = new ComboBox { Header = "下载源", HorizontalAlignment = HorizontalAlignment.Stretch };
-        combo.Items.Add("自动（官方优先，失败时回退镜像）");
-        combo.Items.Add("官方源");
-        combo.Items.Add("BMCLAPI 镜像");
-        combo.Items.Add("自定义镜像");
-        combo.SelectedIndex = Math.Clamp((int)config.Source, 0, 3);
-        combo.SelectionChanged += (_, _) =>
-        {
-            config.Source = (DownloadSource)Math.Max(0, combo.SelectedIndex);
-            Save();
-        };
-        panel.Children.Add(combo);
-
-        panel.Children.Add(CreateText("自定义镜像地址", config.CustomSourceUrl,
-            v => config.CustomSourceUrl = v.Trim(), "https://bmclapi2.bangbang93.com"));
-
         panel.Children.Add(CreateNumber("下载线程数", config.DownloadThreads, 1, 256,
             v => config.DownloadThreads = v));
         panel.Children.Add(CreateNumber("重试次数", config.DownloadRetry, 1, 10,
             v => config.DownloadRetry = v));
         panel.Children.Add(CreateNumber("限速 (KB/s，0 = 不限速)", config.DownloadSpeedLimitKb, 0, 102400,
             v => config.DownloadSpeedLimitKb = v));
+
+        // ---------- 分类型下载源 ----------
+        panel.Children.Add(Header("下载源"));
+
+        var cross = new ToggleSwitch
+        {
+            Header = "多源交叉下载",
+            OnContent = "开启（各源并行，吞吐更高）",
+            OffContent = "关闭（只走首选源）",
+            IsOn = config.EffectiveSources.CrossSource
+        };
+        cross.Toggled += (_, _) =>
+        {
+            config.EffectiveSources.CrossSource = cross.IsOn;
+            Save();
+        };
+        panel.Children.Add(cross);
+
+        panel.Children.Add(CreateText("自定义镜像地址（留空则不参与）",
+            config.CustomSourceUrl, v => config.CustomSourceUrl = v.Trim(),
+            "https://bmclapi2.bangbang93.com"));
+
+        AddSourceGroup(panel, "资源文件 (assets)", config.EffectiveSources.Assets);
+        AddSourceGroup(panel, "游戏与库文件", config.EffectiveSources.Game);
+        AddSourceGroup(panel, "模组加载器", config.EffectiveSources.Loader);
+
+        panel.Children.Add(CreateText("提示",
+            "资源文件走官方 CDN 通常更快；版本与加载器元数据走 BMCLAPI 更快。",
+            _ => { }, null, true));
+    }
+
+    /// <summary>为一个文件类型生成一组"源开关+地址"编辑控件。</summary>
+    private void AddSourceGroup(StackPanel panel, string title, List<SourceOption> list)
+    {
+        var groupHeader = new TextBlock
+        {
+            Text = title,
+            Margin = new Thickness(0, 16, 0, 8),
+            Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"]
+        };
+        panel.Children.Add(groupHeader);
+
+        foreach (var opt in list.OrderBy(o => o.Priority).ToList())
+        {
+            var row = new Grid { Margin = new Thickness(0, 4, 0, 4), ColumnSpacing = 8 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var url = new TextBox
+            {
+                Text = opt.BaseUrl,
+                PlaceholderText = "https://...",
+                HorizontalAlignment = HorizontalAlignment.Stretch
+            };
+            url.LostFocus += (_, _) =>
+            {
+                opt.BaseUrl = url.Text.Trim();
+                Save();
+            };
+
+            var enabled = new CheckBox
+            {
+                Content = opt.Name,
+                IsChecked = opt.Enabled,
+                MinWidth = 110
+            };
+            enabled.Checked += (_, _) => { opt.Enabled = true; Save(); };
+            enabled.Unchecked += (_, _) =>
+            {
+                // 至少保留一个启用源，否则无法下载
+                if (list.Count(o => o.Enabled) <= 1 && opt.Enabled)
+                {
+                    enabled.IsChecked = true;
+                    return;
+                }
+                opt.Enabled = false;
+                Save();
+            };
+
+            Grid.SetColumn(enabled, 1);
+            row.Children.Add(url);
+            row.Children.Add(enabled);
+            panel.Children.Add(row);
+        }
     }
 
     #endregion

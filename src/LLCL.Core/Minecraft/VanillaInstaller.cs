@@ -137,6 +137,32 @@ public static class VanillaInstaller
 
         return current.Id;
     }
+    /// <summary>校验已存在的资源索引是否符合期望的 SHA1。</summary>
+    private static async Task<bool> IsIndexValidAsync(string indexPath, string? expectedSha1,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(expectedSha1)) return true;
+
+        try
+        {
+            await using var stream = File.OpenRead(indexPath);
+            var hash = await System.Security.Cryptography.SHA1.HashDataAsync(stream, ct)
+                .ConfigureAwait(false);
+            return string.Equals(Convert.ToHexString(hash).ToLowerInvariant(),
+                expectedSha1.ToLowerInvariant(), StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>同步下载单个文件（用于必须先就绪的索引类文件）。</summary>
+    private static async Task _DownloadSingleAsync(Net.DownloadItem item, CancellationToken ct)
+    {
+        var downloader = new Net.FileDownloader();
+        await downloader.DownloadAllAsync([item], ct).ConfigureAwait(false);
+    }
     /// <summary>收集需要下载的全部文件（客户端 jar、库、资源、资源索引、日志配置）。</summary>
     public static async Task _CollectFilesAsync(VersionJson version, string versionsRoot,
         List<Net.DownloadItem> items, CancellationToken ct)
@@ -221,15 +247,31 @@ public static class VanillaInstaller
         {
             var indexId = version.AssetIndex.Id;
             var indexPath = Path.Combine(Paths.AssetsDir, "indexes", indexId + ".json");
-            add(new Net.DownloadItem
+
+            var indexItem = new Net.DownloadItem
             {
                 Url = version.AssetIndex.Url,
                 TargetPath = indexPath,
                 Sha1 = version.AssetIndex.Sha1,
                 Size = version.AssetIndex.Size
-            });
+            };
 
-            // 资源对象需索引文件就绪后才可枚举；此处若索引不存在，先下载后由上层补跑
+            // 索引必须先在本地就绪，才能枚举其声明的资源对象。
+            // 关键：同一批次内索引只是被"加入队列"，此时文件还不存在，
+            // 因此必须单独同步下载索引，否则资源对象一个都进不了队列，
+            // 导致游戏启动时报 NoSuchFileException。
+            if (!File.Exists(indexPath) || !await IsIndexValidAsync(indexPath, version.AssetIndex.Sha1, ct)
+                    .ConfigureAwait(false))
+            {
+                Logger.Info($"先下载资源索引 {indexId}");
+                await _DownloadSingleAsync(indexItem, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                // 索引已存在且有效，无需重复下载
+                Logger.Debug($"资源索引已就绪: {indexId}");
+            }
+
             if (File.Exists(indexPath))
             {
                 var objects = AssetManager.ReadIndex(indexPath);
@@ -245,9 +287,13 @@ public static class VanillaInstaller
                         Size = obj.Size
                     });
                 }
-            }
 
-            await Task.CompletedTask.ConfigureAwait(false);
+                Logger.Info($"资源索引 {indexId} 声明 {objects.Count()} 个对象");
+            }
+            else
+            {
+                Logger.Error($"资源索引下载失败，资源文件无法枚举: {indexPath}");
+            }
         }
 
         // 日志配置（log4j 等）
@@ -322,6 +368,7 @@ public static class VanillaInstaller
         await Task.CompletedTask.ConfigureAwait(false);
     }
 }
+
 
 
 

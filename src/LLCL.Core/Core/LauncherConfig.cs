@@ -35,6 +35,66 @@ public enum DownloadSource
     Custom = 3
 }
 
+/// <summary>
+/// 单个下载源的配置：主机地址 + 是否参与该类型文件的下载。
+/// </summary>
+public sealed class SourceOption
+{
+    /// <summary>显示名称，用于设置界面。</summary>
+    public string Name { get; set; } = "";
+
+    /// <summary>主机基地址，例如 https://bmclapi2.bangbang93.com 。</summary>
+    public string BaseUrl { get; set; } = "";
+
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>优先级，数字越小越先尝试。</summary>
+    public int Priority { get; set; }
+}
+
+/// <summary>
+/// 按文件类型划分的下载源配置。
+/// <para>
+/// 不同类型的最优源并不相同：assets 在官方 CDN 上更快，
+/// 而版本 JSON 与加载器元数据在 BMCLAPI 上更快。
+/// 因此允许用户分别配置，并支持多个源交叉使用以提高并发。
+/// </para>
+/// </summary>
+public sealed class DownloadSources
+{
+    /// <summary>原版资源文件（assets objects）的源列表。</summary>
+    public List<SourceOption> Assets { get; set; } = [];
+
+    /// <summary>版本 JSON、客户端 jar、libraries 的源列表。</summary>
+    public List<SourceOption> Game { get; set; } = [];
+
+    /// <summary>加载器（Fabric/Forge/NeoForge/Quilt）的源列表。</summary>
+    public List<SourceOption> Loader { get; set; } = [];
+
+    /// <summary>是否启用多源交叉下载（按源并发分配，提升整体吞吐）。</summary>
+    public bool CrossSource { get; set; } = true;
+
+    /// <summary>创建内置默认配置。</summary>
+    public static DownloadSources CreateDefault() => new()
+    {
+        Assets =
+        [
+            new SourceOption { Name = "官方 CDN", BaseUrl = "https://resources.download.minecraft.net", Priority = 0 },
+            new SourceOption { Name = "BMCLAPI", BaseUrl = "https://bmclapi2.bangbang93.com/assets", Priority = 1 },
+            new SourceOption { Name = "MCMirror", BaseUrl = "https://mirror.minguncle.cn/assets", Enabled = false, Priority = 2 }
+        ],
+        Game =
+        [
+            new SourceOption { Name = "BMCLAPI", BaseUrl = "https://bmclapi2.bangbang93.com", Priority = 0 },
+            new SourceOption { Name = "官方源", BaseUrl = "https://official", Priority = 1 }
+        ],
+        Loader =
+        [
+            new SourceOption { Name = "BMCLAPI", BaseUrl = "https://bmclapi2.bangbang93.com", Priority = 0 },
+            new SourceOption { Name = "官方源", BaseUrl = "https://official", Priority = 1 }
+        ]
+    };
+}
 public enum JavaSelection
 {
     /// <summary>自动选择最合适的 Java。</summary>
@@ -83,6 +143,36 @@ public sealed class LauncherConfig
     // ---------- 下载 ----------
     public DownloadSource Source { get; set; } = DownloadSource.Auto;
     public string CustomSourceUrl { get; set; } = "https://bmclapi2.bangbang93.com";
+
+    /// <summary>
+    /// 按文件类型配置的下载源。为 null 时使用内置默认值。
+    /// 老配置文件没有此字段，反序列化后为 null，由访问器补默认值。
+    /// </summary>
+    public DownloadSources? Sources { get; set; }
+
+    /// <summary>取有效的分类型源配置（缺失时回落到默认值）。</summary>
+    public DownloadSources EffectiveSources
+    {
+        get
+        {
+            Sources ??= DownloadSources.CreateDefault();
+            var def = DownloadSources.CreateDefault();
+            EnsureList(Sources.Assets, def.Assets);
+            EnsureList(Sources.Game, def.Game);
+            EnsureList(Sources.Loader, def.Loader);
+            return Sources;
+        }
+    }
+
+    /// <summary>
+    /// 保证某类源的列表非空且至少有一个启用项。
+    /// 用户若把全部源关掉会导致无法下载，这里兜底启用第一个。
+    /// </summary>
+    private static void EnsureList(List<SourceOption> list, List<SourceOption> fallback)
+    {
+        if (list.Count == 0) { list.AddRange(fallback); return; }
+        if (!list.Any(s => s.Enabled)) list[0].Enabled = true;
+    }
     /// <summary>下载线程数。过高会被镜像站限流，反而导致大量失败。</summary>
     public int DownloadThreads { get; set; } = 16;
     public int DownloadRetry { get; set; } = 3;
@@ -198,6 +288,9 @@ public sealed class LauncherConfig
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 }
+
+
+
 
 
 

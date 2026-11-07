@@ -289,55 +289,119 @@ public sealed class FileDownloader
     {
         var threads = Math.Clamp(LauncherConfig.Current.DownloadThreads, 1, 256);
         var retry = Math.Max(1, LauncherConfig.Current.DownloadRetry);
-        var queue = new ConcurrentQueue<DownloadItem>(missing);
         var errors = new ConcurrentBag<Exception>();
 
-        var workers = Enumerable.Range(0, Math.Min(threads, missing.Count)).Select(_ => Task.Run(async () =>
+        // 交叉并发：按文件的首选源分组，每个源独占一个下载队列。
+        // 这样不同源的文件同时下载，总吞吐是各源之和，
+        // 而不是所有文件挤在同一个源上互相争抢带宽。
+        var sources = LauncherConfig.Current.EffectiveSources;
+        var buckets = new Dictionary<string, ConcurrentQueue<DownloadItem>>(StringComparer.OrdinalIgnoreCase);
+        var bucketOrder = new List<string>();
+
+        if (sources.CrossSource)
         {
-            while (!ct.IsCancellationRequested && queue.TryDequeue(out var item))
+            foreach (var item in missing)
             {
-                // 暂停时等待
-                await _WaitIfPausedAsync(ct).ConfigureAwait(false);
-
-                Exception? lastError = null;
-                for (var attempt = 0; attempt < retry; attempt++)
+                var key = FirstSourceKey(item.Url);
+                if (!buckets.TryGetValue(key, out var q))
                 {
-                    try
-                    {
-                        await _DownloadOneAsync(item, ct).ConfigureAwait(false);
-                        Interlocked.Increment(ref _completedFiles);
-                        lastError = null;
-                        break;
-                    }
-                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        lastError = ex;
-                        Logger.Warn($"下载失败({attempt + 1}/{retry}) {item.Url}: {ex.Message}");
-                        // 哈希失败时删掉损坏文件，保证下次是干净重试
-                        if (ex is InvalidDataException) _TryDelete(item.TargetPath);
-                        await Task.Delay(600 * (attempt + 1), ct).ConfigureAwait(false);
-                    }
+                    q = new ConcurrentQueue<DownloadItem>();
+                    buckets[key] = q;
+                    bucketOrder.Add(key);
                 }
-
-                if (lastError is not null)
-                {
-                    errors.Add(new Exception($"下载失败: {Path.GetFileName(item.TargetPath)}", lastError));
-                    Interlocked.Increment(ref _failedFiles);
-                    Interlocked.Increment(ref _completedFiles);
-                }
-
-                _RaiseProgress(item.TargetPath);
+                q.Enqueue(item);
             }
-        }, ct)).ToArray();
+        }
+        else
+        {
+            // 不交叉时全部走首选源，退化为原来的单队列行为
+            var q = new ConcurrentQueue<DownloadItem>(missing);
+            buckets[""] = q;
+            bucketOrder.Add("");
+        }
+
+        // 按各队列的文件数量分配线程，每个源至少 1 个
+        var totalFiles = Math.Min(threads, missing.Count);
+        var workers = new List<Task>();
+
+        foreach (var key in bucketOrder)
+        {
+            var queue = buckets[key];
+            var count = queue.Count;
+            var share = buckets.Count == 1
+                ? totalFiles
+                : Math.Max(1, (int)Math.Round(totalFiles * (double)count / missing.Count));
+
+            for (var i = 0; i < share; i++)
+            {
+                workers.Add(Task.Run(() => RunWorker(queue, retry, errors, ct)));
+            }
+        }
 
         await Task.WhenAll(workers).ConfigureAwait(false);
 
-        if (!errors.IsEmpty)
-            throw new AggregateException("部分文件下载失败", errors);
+        if (errors.Count > 0)
+            throw new AggregateException($"{errors.Count} 个文件下载失败", errors);
+    }
+
+    /// <summary>返回该文件在分类型配置里首选源的标识（基地址）。</summary>
+    private static string FirstSourceKey(string officialUrl)
+    {
+        var kind = DownloadMirror.Classify(officialUrl);
+        var sources = LauncherConfig.Current.EffectiveSources;
+
+        var options = kind switch
+        {
+            FileKind.Asset => sources.Assets,
+            FileKind.Loader => sources.Loader,
+            _ => sources.Game
+        };
+
+        var first = options.Where(o => o.Enabled).OrderBy(o => o.Priority).FirstOrDefault();
+        return first?.BaseUrl ?? "";
+    }
+
+    /// <summary>单个下载工作线程：不断从队列取任务并下载，直到队列空。</summary>
+    private async Task RunWorker(ConcurrentQueue<DownloadItem> queue, int retry,
+        ConcurrentBag<Exception> errors, CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested && queue.TryDequeue(out var item))
+        {
+            await _WaitIfPausedAsync(ct).ConfigureAwait(false);
+
+            Exception? lastError = null;
+            for (var attempt = 0; attempt < retry; attempt++)
+            {
+                try
+                {
+                    await _DownloadOneAsync(item, ct).ConfigureAwait(false);
+                    Interlocked.Increment(ref _completedFiles);
+                    lastError = null;
+                    break;
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    lastError = ex;
+                    Logger.Warn($"下载失败({attempt + 1}/{retry}) {item.Url}: {ex.Message}");
+                    // 哈希失败时删掉损坏文件，保证下次是干净重试
+                    if (ex is InvalidDataException) _TryDelete(item.TargetPath);
+                    await Task.Delay(600 * (attempt + 1), ct).ConfigureAwait(false);
+                }
+            }
+
+            if (lastError is not null)
+            {
+                errors.Add(new Exception($"下载失败: {Path.GetFileName(item.TargetPath)}", lastError));
+                Interlocked.Increment(ref _failedFiles);
+                Interlocked.Increment(ref _completedFiles);
+            }
+
+            _RaiseProgress(item.TargetPath);
+        }
     }
 
     private async Task _WaitIfPausedAsync(CancellationToken ct)
@@ -386,8 +450,11 @@ public sealed class FileDownloader
     {
         var urls = new List<string>();
 
-        var primary = DownloadMirror.MapUrl(item.Url);
-        if (!urls.Contains(primary)) urls.Add(primary);
+        // 按分类型配置给出该文件的全部候选源（已按优先级排序）
+        foreach (var candidate in DownloadMirror.GetCandidates(item.Url))
+        {
+            if (!urls.Contains(candidate)) urls.Add(candidate);
+        }
 
         foreach (var fallback in item.FallbackUrls)
         {
