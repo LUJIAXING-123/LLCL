@@ -25,7 +25,13 @@ public static class MicrosoftAuth
     private const string TokenUrl =
         "https://login.live.com/oauth20_token.srf";
 
-    private const string Scope = "XboxLive.signin offline_access";
+    /// <summary>
+    /// 授权范围。
+    /// MBI_SSL 是 Minecraft 服务要求的经典 scope：
+    /// 只有带该 scope 的令牌，XSTS 才能为 rp://api.minecraftservices.com/ 签发可用凭据。
+    /// 若换成 XboxLive.signin，XSTS 能通过但 login_with_xbox 会一律返回 403。
+    /// </summary>
+    private const string Scope = "service::user.auth.xboxlive.com::MBI_SSL";
 
     private const string XblUrl = "https://user.auth.xboxlive.com/user/authenticate";
     private const string XstsUrl = "https://xsts.auth.xboxlive.com/xsts/authorize";
@@ -247,13 +253,10 @@ public static class MicrosoftAuth
         var xblToken = xbl?["Token"]?.GetValue<string>()
                        ?? throw new AuthException("Xbox Live 验证失败（可能账号未开通 Xbox 服务）");
 
-        var uhs = xbl?["DisplayClaims"]?["xui"]?[0]?["uhs"]?.GetValue<string>()
-                    ?? throw new AuthException("Xbox Live 返回数据异常");
-
         progress?.Invoke("正在验证 Xbox 安全令牌…");
 
         // 2. XSTS 令牌
-        // 关键：必须使用 RelyingParty（骤准的 Minecraft 服务地址）而非 SandboxId，
+        // 关键：必须使用 RelyingParty（准确的 Minecraft 服务地址）而非 SandboxId，
         // 否则拿到的令牌无法用于 Minecraft 登录。
         var xstsPayload = new JsonObject
         {
@@ -281,6 +284,10 @@ public static class MicrosoftAuth
             });
         }
 
+        // userHash 必须从 XSTS 响应里取，XBL 响应里的 uhs 不能直接用于 Minecraft 登录
+        var uhs = xsts["DisplayClaims"]?["xui"]?[0]?["uhs"]?.GetValue<string>()
+                    ?? throw new AuthException("XSTS 返回数据缺少用户哈希");
+
         progress?.Invoke("正在获取 Minecraft 令牌…");
 
         // 3. Minecraft 访问令牌
@@ -298,12 +305,15 @@ public static class MicrosoftAuth
         {
             Logger.Warn($"Minecraft 登录失败 HTTP {mcStatus}: {mc?.ToJsonString() ?? "空响应"}");
 
-            // 401/403 通常意味着该账号没有 Minecraft 授权
             if (mcStatus is 401 or 403)
             {
                 throw new AuthException(
-                    "该微软账号没有购买 Minecraft。\n" +
-                    "请确认登录的账号与购买游戏时使用的是同一个微软账号。");
+                    "微软拒绝签发 Minecraft 令牌。\n" +
+                    "常见原因：\n" +
+                    "1. 该账号未购买 Minecraft（或已迁移到其他微软账号）\n" +
+                    "2. 该账号没有创建 Xbox 档案\n" +
+                    "3. 登录时浏览器自动带入了错误的微软账号\n" +
+                    "请用无痕窗口重新登录，并确认使用的是已购买游戏的账号。");
             }
 
             throw new AuthException(
