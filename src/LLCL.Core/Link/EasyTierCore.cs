@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace LLCL.Core.Link;
 
@@ -278,7 +279,7 @@ public sealed class EasyTierCore : IDisposable
         // 中继节点。
         // 注意：EasyTier 2.x 的参数名是 --peers（复数，可跟多个值）；
         // 旧参数 --p 已在 2.6 移除，写成 --p 会导致进程启动即报错退出。
-        var relays = _RelayNodes().ToList();
+        var relays = await _RelayNodesAsync(ct).ConfigureAwait(false);
         if (relays.Count == 1)
         {
             args.Add("--peers");
@@ -349,26 +350,40 @@ public sealed class EasyTierCore : IDisposable
     }
 
     /// <summary>
-    /// 验证过的公共中继节点。
-    /// <para>
-    /// 官方默认地址 public.easytier.top / public2.easytier.cn 的域名已经失效
-    /// （DNS 查不到记录），会导致 EasyTier 一直 connect timeout 连不上中继，
-    /// 表现为房主看似连上、加入端永远等待超时。
-    /// 下面的地址取自 PCL-CE 的备用节点列表，实测可用。
-    /// </para>
+    /// 官方公共中继域名，DNS 记录已不存在，仅作为最后的兜底尝试。
     /// </summary>
-    private static readonly string[] KnownRelayNodes =
+    private static readonly string[] OfficialFallbackNodes =
     [
-        "tcp://183.66.27.22:39409"
+        "tcp://public.easytier.top:11010",
+        "tcp://public2.easytier.cn:54321"
     ];
 
-    /// <summary>提供公共中继节点的动态接口，格式与 PCL-CE 相同。</summary>
+    /// <summary>社区维护的节点解析接口，每次请求返回一个可用地址。</summary>
+    private static readonly string[] NodeResolverUrls =
+    [
+        "https://etnode.zkitefly.eu.org/node1",
+        "https://etnode.zkitefly.eu.org/node2"
+    ];
+
+    /// <summary>提供公共中继节点的官方动态接口（与 PCL-CE 使用的一致）。</summary>
     private const string RelayApiUrl =
         "https://uptime.easytier.cn/api/nodes?page=1&per_page=50&is_active=true";
 
-    private static IEnumerable<string> _RelayNodes()
+    /// <summary>动态获取到的节点缓存，避免每次建房都重新请求。</summary>
+    private static List<string>? _dynamicNodes;
+    private static DateTime _dynamicNodesExpire = DateTime.MinValue;
+
+    /// <summary>
+    /// 汇总本次启动需要携带的中继节点。
+    /// <para>
+    /// 顺序：用户自定义 → 动态获取的公共节点 → 官方兜底。
+    /// 动态获取失败时不阻塞建房，直接使用兜底列表。
+    /// </para>
+    /// </summary>
+    private static async Task<List<string>> _RelayNodesAsync(CancellationToken ct)
     {
         var nodes = new List<string>();
+
         var primary = LauncherConfig.Current.EasyTierRelay;
         if (!string.IsNullOrWhiteSpace(primary)) nodes.Add(primary);
 
@@ -378,10 +393,97 @@ public sealed class EasyTierCore : IDisposable
             if (node.Contains("://", StringComparison.Ordinal)) nodes.Add(node);
         }
 
-        // 实测可用的公共中继（官方默认地址已失效，不能再用）
-        nodes.AddRange(KnownRelayNodes);
+        foreach (var node in await _GetPublicNodesAsync(ct).ConfigureAwait(false))
+            nodes.Add(node);
 
-        return nodes.Distinct();
+        // 官方地址已失效，但保留兜底以免未来恢复
+        foreach (var node in OfficialFallbackNodes) nodes.Add(node);
+
+        return nodes.Distinct().ToList();
+    }
+
+    /// <summary>
+    /// 获取公共中继节点，带 10 分钟缓存。
+    /// 先请求官方 API，失败则请求社区解析接口，两者都失败时返回空列表。
+    /// </summary>
+    private static async Task<List<string>> _GetPublicNodesAsync(CancellationToken ct)
+    {
+        if (_dynamicNodes is not null && DateTime.Now < _dynamicNodesExpire)
+            return _dynamicNodes;
+
+        var result = new List<string>();
+
+        // 1. 官方节点 API
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(12));
+
+            var json = await Net.Http.GetStringAsync(RelayApiUrl, 1, TimeSpan.FromSeconds(12), cts.Token)
+                .ConfigureAwait(false);
+
+            var node = JsonNode.Parse(json);
+            if (node?["data"]?["items"] is JsonArray items)
+            {
+                foreach (var item in items)
+                {
+                    if (item?["is_active"]?.GetValue<bool>() != true) continue;
+                    if (item["allow_relay"]?.GetValue<bool>() != true) continue;
+
+                    var address = item["address"]?.GetValue<string>();
+                    if (!string.IsNullOrWhiteSpace(address)) result.Add(address);
+                }
+            }
+
+            if (result.Count > 0)
+                Logger.Info($"从官方接口获取 {result.Count} 个公共中继节点");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"官方中继接口不可用: {ex.Message}");
+        }
+
+        // 2. 社区节点解析接口
+        if (result.Count == 0)
+        {
+            foreach (var url in NodeResolverUrls)
+            {
+                try
+                {
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    cts.CancelAfter(TimeSpan.FromSeconds(12));
+
+                    var text = await Net.Http.GetStringAsync(url, 1, TimeSpan.FromSeconds(12), cts.Token)
+                        .ConfigureAwait(false);
+
+                    var address = text.Trim();
+                    if (address.Contains("://", StringComparison.Ordinal))
+                    {
+                        result.Add(address);
+                        Logger.Info($"从社区接口获取公共中继节点: {address}");
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Debug($"社区节点接口不可用 {url}: {ex.Message}");
+                }
+            }
+        }
+
+        // 两者都失败：保留上次成功的缓存，避免每次都重新探测
+        if (result.Count > 0)
+        {
+            _dynamicNodes = result;
+            _dynamicNodesExpire = DateTime.Now.AddMinutes(10);
+        }
+        else
+        {
+            Logger.Warn("未能获取任何公共中继节点，将使用兜底地址");
+            _dynamicNodes ??= [];
+        }
+
+        return result;
     }
 
     private static string _Quote(string arg)
@@ -550,5 +652,8 @@ public sealed class PeerInfo
         }
     }
 }
+
+
+
 
 
