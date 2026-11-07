@@ -124,17 +124,31 @@ public sealed partial class HomePage : Page
             return;
         }
 
-        LaunchButton.IsEnabled = false;
-        LaunchProgress.Visibility = Visibility.Visible;
+        if (ProcessTracker.IsRunning(version))
+        {
+            await ShowAsync("游戏正在运行", $"版本 {version} 已经在运行中。");
+            return;
+        }
+
+        SetLaunchBusy(true);
 
         try
         {
-            var result = await GameLaunchService.EnsureAndLaunchAsync(version, this);
+            var result = await GameLaunchService.EnsureAndLaunchAsync(version, this, OnLaunchStage);
+
             if (result.NeedsJava)
+            {
                 await ShowAsync("未找到 Java",
                     "启动游戏需要 Java 运行时。请在“设置 - 启动”中指定 Java 路径，或安装 Java 后重试。");
+            }
             else if (!result.Success)
-                await ShowAsync("启动失败", result.Message ?? "未知错误");
+            {
+                // 崩溃时会由 CrashDialog 单独提示，这里只处理非崩溃的失败
+                if (result.Crash is null)
+                    await ShowAsync("启动失败", result.Message ?? "未知错误");
+                else
+                    await CrashDialog.ShowAsync(result.Crash);
+            }
         }
         catch (Exception ex)
         {
@@ -143,9 +157,36 @@ public sealed partial class HomePage : Page
         }
         finally
         {
-            LaunchButton.IsEnabled = true;
-            LaunchProgress.Visibility = Visibility.Collapsed;
+            SetLaunchBusy(false);
             Refresh();
+        }
+    }
+
+    /// <summary>启动阶段回调，更新按钮下的提示文字。</summary>
+    private void OnLaunchStage(GameLaunchService.LaunchStage stage)
+    {
+        Dispatch(() =>
+        {
+            LaunchStageText.Text = stage.Message;
+        });
+    }
+
+    /// <summary>进入/退出启动忙碌状态：按钮转圈，进度条常驻直到窗口出现。</summary>
+    private void SetLaunchBusy(bool busy)
+    {
+        LaunchButton.IsEnabled = !busy;
+        LaunchProgress.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        LaunchStageText.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+
+        if (busy)
+        {
+            LaunchButton.Content = "启动中…";
+            LaunchStageText.Text = "正在准备…";
+        }
+        else
+        {
+            LaunchButton.Content = "启动";
+            LaunchStageText.Text = string.Empty;
         }
     }
 
@@ -159,6 +200,14 @@ public sealed partial class HomePage : Page
             XamlRoot = XamlRoot
         };
         await dialog.ShowAsync();
+    }
+
+    /// <summary>切回 UI 线程执行（启动回调可能来自后台线程）。</summary>
+    private void Dispatch(Action action)
+    {
+        var queue = DispatcherQueue;
+        if (queue is null) { action(); return; }
+        queue.TryEnqueue(() => action());
     }
 
     private void GoDownload_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("download");

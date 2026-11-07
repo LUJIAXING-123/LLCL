@@ -42,6 +42,9 @@
                         </Grid>
                         <ProgressBar x:Name="LaunchProgress" IsIndeterminate="True" Value="0"
                                      Visibility="Collapsed" Height="4" />
+                        <TextBlock x:Name="LaunchStageText" Visibility="Collapsed"
+                                   Style="{StaticResource SubHeaderTextStyle}"
+                                   TextTrimming="CharacterEllipsis" />
                         <ComboBox x:Name="VersionComboBox" HorizontalAlignment="Stretch"
                                   Header="游戏版本" SelectionChanged="VersionComboBox_SelectionChanged" />
                     </StackPanel>

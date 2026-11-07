@@ -1,4 +1,5 @@
 using LLCL.Core;
+using LLCL.Core.Account;
 using LLCL.Core.Minecraft;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -8,16 +9,61 @@ namespace LLCL.Services;
 /// <summary>按版本启动游戏（无实例概念）。</summary>
 public static class GameLaunchService
 {
-    public sealed record LaunchResult(bool Success, bool NeedsJava, string? Message);
+    /// <summary>启动过程中的阶段，用于界面显示进度文案。</summary>
+    public sealed record LaunchStage(string Message, double Ratio);
 
-    public static async Task<LaunchResult> EnsureAndLaunchAsync(string versionId, FrameworkElement host)
+    /// <summary>启动结果。</summary>
+    public sealed record LaunchResult(
+        bool Success,
+        bool NeedsJava,
+        string? Message,
+        CrashReport? Crash = null,
+        bool WindowAppeared = false);
+
+    /// <summary>
+    /// 完整启动流程：
+    /// 登录校验 → 补全文件 → 选择 Java → 启动 → 等待窗口 → 崩溃检测。
+    /// </summary>
+    public static async Task<LaunchResult> EnsureAndLaunchAsync(string versionId, FrameworkElement host,
+        Action<LaunchStage>? onStage = null)
     {
         var config = LauncherConfig.Current;
-        // 与 PCL 一致：默认使用 .minecraft 根目录，版本设置可开启隔离
         var vsSettings = VersionSettings.Load(versionId);
         var gameDir = vsSettings.GetGameDir(versionId);
 
-        // 1. 版本文件缺失时先补全
+        // ---------- 1. 登录 ----------
+        onStage?.Invoke(new LaunchStage("正在验证账号…", 0.08));
+
+        AccountEntry account;
+        try
+        {
+            var selected = AccountManager.Selected;
+
+            if (selected is null)
+            {
+                // 没有保存的账号时用离线账号，避免阻断启动
+                account = AccountManager.CreateOffline(config.OfflineUserName);
+                Logger.Info($"使用离线账号启动：{account.Name}");
+            }
+            else
+            {
+                onStage?.Invoke(new LaunchStage($"正在登录 {selected.Name}…", 0.12));
+                account = await AccountManager.EnsureValidAsync(selected).ConfigureAwait(true);
+            }
+        }
+        catch (AuthException ex)
+        {
+            return new LaunchResult(false, false, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "账号验证失败");
+            return new LaunchResult(false, false, "账号验证失败：" + ex.Message);
+        }
+
+        // ---------- 2. 补全文件 ----------
+        onStage?.Invoke(new LaunchStage("正在检查游戏文件…", 0.18));
+
         var versionJson = Path.Combine(Paths.VersionsDir, versionId, versionId + ".json");
         if (!File.Exists(versionJson))
         {
@@ -34,21 +80,20 @@ public static class GameLaunchService
             if (await confirm.ShowAsync() != ContentDialogResult.Primary)
                 return new LaunchResult(false, false, "用户取消");
 
+            onStage?.Invoke(new LaunchStage("正在下载游戏文件…", 0.24));
             await VanillaInstaller.InstallAsync(versionId, Paths.VersionsDir, null);
         }
 
-        // 2. 选择 Java（后台扫描，不阻塞 UI）
+        // ---------- 3. 选择 Java ----------
+        onStage?.Invoke(new LaunchStage("正在查找 Java 运行时…", 0.32));
+
         var javaPath = await ResolveJavaAsync(versionId);
         if (javaPath is null)
             return new LaunchResult(false, true, "未找到 Java 运行时");
 
-        // 3. 账号
-        var account = config.AccountType == "microsoft" && !string.IsNullOrWhiteSpace(config.MicrosoftUserName)
-            ? new LaunchAccount(config.MicrosoftUserName!, config.MicrosoftUuid ?? Guid.NewGuid().ToString(),
-                config.MicrosoftAccessToken ?? "0", "microsoft")
-            : LaunchAccount.Offline(config.OfflineUserName);
+        // ---------- 4. 组装参数 ----------
+        onStage?.Invoke(new LaunchStage("正在准备启动命令…", 0.40));
 
-        // 版本级设置优先于全局设置
         var vs = VersionSettings.Load(versionId);
         var maxMemory = vs.OverrideMemory == true
             ? vs.MaxMemoryMb
@@ -57,7 +102,7 @@ public static class GameLaunchService
 
         var options = new GameLauncher.LaunchOptions
         {
-            Account = account,
+            Account = ToLaunchAccount(account),
             JavaPath = javaPath,
             MaxMemoryMb = maxMemory,
             MinMemoryMb = minMemory,
@@ -65,20 +110,96 @@ public static class GameLaunchService
             ExtraGameArgs = vs.ExtraGameArgs.Length > 0 ? vs.ExtraGameArgs : config.ExtraGameArgs,
             Fullscreen = vs.OverrideWindow == true ? vs.Fullscreen : config.Fullscreen,
             Width = vs.OverrideWindow == true ? vs.Width : config.WindowWidth,
-            Height = vs.OverrideWindow == true ? vs.Height : config.WindowHeight
+            Height = vs.OverrideWindow == true ? vs.Height : config.WindowHeight,
+            // 第三方账号需要注入 authlib-injector 才能正确验证并显示皮肤
+            AuthServerUrl = account.Kind == AccountKind.ThirdParty ? account.ServerUrl : null
         };
+
+        // ---------- 5. 启动 ----------
+        System.Diagnostics.Process process;
 
         try
         {
-            var process = await GameLauncher.LaunchAsync(versionId, gameDir, options);
-            ProcessTracker.Track(versionId, process);
-            return new LaunchResult(true, false, null);
+            onStage?.Invoke(new LaunchStage("正在启动游戏…", 0.48));
+            process = await GameLauncher.LaunchAsync(versionId, gameDir, options);
         }
         catch (Exception ex)
         {
             Logger.Error(ex, $"启动版本 {versionId} 失败");
             return new LaunchResult(false, false, ex.Message);
         }
+
+        ProcessTracker.Track(versionId, process);
+
+        // ---------- 6. 等待游戏窗口 ----------
+        onStage?.Invoke(new LaunchStage("正在等待游戏窗口…", 0.62));
+
+        var handle = await WindowWatcher.WaitForGameWindowAsync(process,
+            TimeSpan.FromSeconds(90));
+
+        if (handle == IntPtr.Zero)
+        {
+            // 窗口没出现就退出：说明启动阶段就崩溃了
+            if (process.HasExited)
+            {
+                var report = await CrashAnalyzer.AnalyzeAsync(versionId, gameDir,
+                    process.ExitCode);
+                return new LaunchResult(false, false, report.Summary, report, false);
+            }
+
+            // 进程还在但没有窗口：可能卡在加载，不判失败，交给用户观察
+            Logger.Warn($"游戏窗口未在超时时间内出现，进程仍在运行（PID {process.Id}）");
+            return new LaunchResult(true, false, "游戏进程已启动，但窗口尚未出现", null, false);
+        }
+
+        var title = WindowWatcher.GetTitle(handle);
+        Logger.Info($"游戏窗口已出现：{title}");
+        onStage?.Invoke(new LaunchStage("游戏已启动", 1.0));
+
+        // ---------- 7. 后台监听退出，崩溃时提示 ----------
+        _WatchForCrash(versionId, gameDir, process);
+
+        return new LaunchResult(true, false, null, null, true);
+    }
+
+    /// <summary>
+    /// 游戏启动后监听退出事件，若属于崩溃则弹窗说明。
+    /// 这个监听在后台线程，通过 UI 线程弹窗。
+    /// </summary>
+    private static void _WatchForCrash(string versionId, string gameDir,
+        System.Diagnostics.Process process)
+    {
+        process.EnableRaisingEvents = true;
+        process.Exited += async (_, _) =>
+        {
+            var exitCode = process.ExitCode;
+            Logger.Info($"游戏进程已退出: {versionId} (ExitCode {exitCode})");
+
+            if (!CrashAnalyzer.IsCrash(exitCode)) return;
+
+            try
+            {
+                var report = await CrashAnalyzer.AnalyzeAsync(versionId, gameDir, exitCode)
+                    .ConfigureAwait(false);
+
+                await CrashDialog.ShowAsync(report).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"崩溃提示失败: {ex.Message}");
+            }
+        };
+    }
+
+    /// <summary>把账号条目转成启动器使用的账号模型。</summary>
+    private static LaunchAccount ToLaunchAccount(AccountEntry account)
+    {
+        return account.Kind switch
+        {
+            AccountKind.Offline => LaunchAccount.Offline(account.Name),
+            _ => new LaunchAccount(account.Name, account.Uuid, account.AccessToken,
+                account.Kind == AccountKind.Microsoft ? "microsoft" : "thirdparty")
+        };
     }
 
     /// <summary>解析要使用的 Java：版本设置优先，其次全局设置，最后按版本要求自动匹配。</summary>
@@ -87,7 +208,6 @@ public static class GameLaunchService
         var config = LauncherConfig.Current;
         var settings = VersionSettings.Load(versionId);
 
-        // 版本单独指定的 Java
         if (settings.OverrideJava == true && !string.IsNullOrWhiteSpace(settings.JavaPath) &&
             File.Exists(settings.JavaPath))
             return settings.JavaPath;
@@ -153,7 +273,6 @@ public static class ProcessTracker
         process.Exited += (_, _) =>
         {
             lock (_lock) _running.Remove(versionId);
-            Logger.Info($"游戏进程已退出: {versionId} (ExitCode {process.ExitCode})");
         };
     }
 }

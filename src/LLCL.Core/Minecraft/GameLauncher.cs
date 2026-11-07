@@ -53,6 +53,12 @@ public sealed class GameLauncher
         public int Height { get; set; } = 480;
         public string? ServerHost { get; set; }
         public int? ServerPort { get; set; }
+
+        /// <summary>
+        /// 第三方验证服务器地址。设置后会在启动参数中注入 authlib-injector，
+        /// 让游戏使用该站的验证与皮肤。
+        /// </summary>
+        public string? AuthServerUrl { get; set; }
     }
 
     /// <summary>启动指定版本，返回 Java 进程。</summary>
@@ -112,6 +118,23 @@ public sealed class GameLauncher
 
         foreach (var extra in options.ExtraJvmArgs)
             if (!string.IsNullOrWhiteSpace(extra)) args.Add(extra);
+
+        // 第三方验证服务器：注入 authlib-injector，
+        // 让游戏向该站验证并加载其皮肤。必须在主类之前作为 JVM 参数。
+        if (!string.IsNullOrWhiteSpace(options.AuthServerUrl))
+        {
+            var injector = AuthlibInjector.Ensure(options.AuthServerUrl, ct);
+
+            if (injector is not null)
+            {
+                args.Add($"-javaagent:{injector}={options.AuthServerUrl}");
+                Logger.Info($"已注入 authlib-injector：{options.AuthServerUrl}");
+            }
+            else
+            {
+                Logger.Warn("未能准备 authlib-injector，第三方皮肤可能不生效");
+            }
+        }
 
         args.Add(version.MainClass);
 

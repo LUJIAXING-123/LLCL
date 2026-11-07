@@ -112,13 +112,19 @@ public sealed class LauncherConfig
     /// <summary>离线登录用户名。</summary>
     public string OfflineUserName { get; set; } = "Player";
 
-    /// <summary>微软账号（可选）。</summary>
+    /// <summary>
+    /// 当前选中账号的 ID，对应 accounts.json 中的条目。
+    /// 为空时回退到离线账号。
+    /// </summary>
+    public string? SelectedAccountId { get; set; }
+
+    /// <summary>微软账号（旧字段，保留以兼容早期配置）。</summary>
     public string? MicrosoftUserName { get; set; }
     public string? MicrosoftUuid { get; set; }
     public string? MicrosoftAccessToken { get; set; }
     public string? MicrosoftRefreshToken { get; set; }
 
-    /// <summary>当前选中的账号类型："offline" / "microsoft"。</summary>
+    /// <summary>当前选中的账号类型："offline" / "microsoft"（兼容字段）。</summary>
     public string AccountType { get; set; } = "offline";
 
     // ---------- 启动 ----------

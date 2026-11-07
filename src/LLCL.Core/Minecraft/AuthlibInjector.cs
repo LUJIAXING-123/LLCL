@@ -1,0 +1,136 @@
+using System.IO.Compression;
+
+namespace LLCL.Core.Minecraft;
+
+/// <summary>
+/// authlib-injector 的下载与定位。
+/// <para>
+/// 第三方皮肤站（LittleSkin 等）依赖这个 Java 代理在运行时改写验证逻辑。
+/// 首次使用某个版本时自动下载并缓存，之后直接复用本地文件。
+/// </para>
+/// </summary>
+public static class AuthlibInjector
+{
+    /// <summary>BMCLAPI 提供的镜像（官方源在国内较慢）。</summary>
+    private const string DownloadUrlsFirst =
+        "https://bmclapi2.bangbang93.com/maven/org/yggdrasilmc/authlib-injector/download";
+
+    /// <summary>GitHub 官方发布页（镜像失效时回退）。</summary>
+    private const string ReleaseApiUrl =
+        "https://api.github.com/repos/yushijinhun/authlib-injector/releases/latest";
+
+    /// <summary>缓存的 jar 文件名。</summary>
+    private const string JarFileName = "authlib-injector.jar";
+
+    /// <summary>缓存目录。</summary>
+    private static string CacheDir => Path.Combine(Paths.DataRoot, "Tools", "authlib-injector");
+
+    private static string CachedJar => Path.Combine(CacheDir, JarFileName);
+
+    /// <summary>
+    /// 确保 authlib-injector 可用，返回 jar 的绝对路径；失败返回 null。
+    /// 该方法为同步阻塞，仅应在后台线程调用（游戏启动前）。
+    /// </summary>
+    public static string? Ensure(string? authServerUrl, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(authServerUrl)) return null;
+
+        // 已有缓存则直接复用
+        if (File.Exists(CachedJar) && new FileInfo(CachedJar).Length > 100_000)
+        {
+            Logger.Debug("复用缓存的 authlib-injector");
+            return CachedJar;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(CacheDir);
+
+            var downloaded = _DownloadAsync(ct).GetAwaiter().GetResult();
+            if (downloaded is null) return null;
+
+            Logger.Info($"authlib-injector 已就绪：{downloaded}");
+            return downloaded;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "下载 authlib-injector 失败");
+            return null;
+        }
+    }
+
+    /// <summary>清理缓存，下次启动会重新下载。</summary>
+    public static void ClearCache()
+    {
+        try
+        {
+            if (Directory.Exists(CacheDir)) Directory.Delete(CacheDir, true);
+            Logger.Info("已清理 authlib-injector 缓存");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"清理缓存失败: {ex.Message}");
+        }
+    }
+
+    private static async Task<string?> _DownloadAsync(CancellationToken ct)
+    {
+        // 优先镜像
+        try
+        {
+            var bytes = await Net.Http.GetBytesAsync(DownloadUrlsFirst, ct: ct).ConfigureAwait(false);
+            if (bytes.Length > 100_000 && IsJar(bytes))
+            {
+                await File.WriteAllBytesAsync(CachedJar, bytes, ct).ConfigureAwait(false);
+                return CachedJar;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"镜像下载 authlib-injector 失败: {ex.Message}");
+        }
+
+        // 回退 GitHub
+        try
+        {
+            var json = await Net.Http.GetStringAsync(ReleaseApiUrl, 1,
+                TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
+
+            var node = System.Text.Json.Nodes.JsonNode.Parse(json);
+            var assets = node?["assets"] as System.Text.Json.Nodes.JsonArray;
+
+            if (assets is not null)
+            {
+                foreach (var asset in assets)
+                {
+                    var name = asset?["name"]?.GetValue<string>() ?? string.Empty;
+                    if (!name.EndsWith(".jar", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var url = asset?["browser_download_url"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(url)) continue;
+
+                    var bytes = await Net.Http.GetBytesAsync(url, ct: ct).ConfigureAwait(false);
+                    if (bytes.Length > 100_000 && IsJar(bytes))
+                    {
+                        await File.WriteAllBytesAsync(CachedJar, bytes, ct).ConfigureAwait(false);
+                        return CachedJar;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"GitHub 下载 authlib-injector 失败: {ex.Message}");
+        }
+
+        return null;
+    }
+
+    /// <summary>简单校验：zip 头为 PK\x03\x04，jar 本质是 zip。</summary>
+    private static bool IsJar(byte[] bytes)
+    {
+        if (bytes.Length < 4) return false;
+        return bytes[0] == 0x50 && bytes[1] == 0x4B && bytes[2] == 0x03 && bytes[3] == 0x04;
+    }
+}
+

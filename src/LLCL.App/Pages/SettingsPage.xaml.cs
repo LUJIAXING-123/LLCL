@@ -1,4 +1,6 @@
 using LLCL.Core;
+using LLCL.Core.Account;
+using LLCL.Services;
 using LLCL.Core.Minecraft;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -125,20 +127,118 @@ public sealed partial class SettingsPage : Page
     private void BuildAccount(StackPanel panel, LauncherConfig config)
     {
         panel.Children.Add(Header("账号"));
-        panel.Children.Add(Hint("LLCL 默认使用离线账号启动，不需要正版账号验证。"));
+        panel.Children.Add(Hint("支持离线账号、微软正版账号和第三方皮肤站账号。"));
 
-        panel.Children.Add(CreateText("离线用户名", config.OfflineUserName,
-            v => config.OfflineUserName = string.IsNullOrWhiteSpace(v) ? "Player" : v.Trim()));
+        // ---------- 账号列表 ----------
+        var listPanel = new StackPanel { Spacing = 8 };
+        panel.Children.Add(listPanel);
 
-        panel.Children.Add(CreateToggle("使用离线账号", config.AccountType != "microsoft",
-            v => config.AccountType = v ? "offline" : "microsoft"));
+        void RebuildAccountList()
+        {
+            listPanel.Children.Clear();
 
-        panel.Children.Add(CreateText("微软账号名（可选）", config.MicrosoftUserName ?? string.Empty,
-            v => config.MicrosoftUserName = string.IsNullOrWhiteSpace(v) ? null : v.Trim(),
-            "选择微软账号模式时使用"));
+            var accounts = AccountManager.Accounts;
+            if (accounts.Count == 0)
+            {
+                listPanel.Children.Add(Hint("还没有添加账号，点下方按钮添加。"));
+                return;
+            }
 
-        panel.Children.Add(CreateText("微软账号 UUID（可选）", config.MicrosoftUuid ?? string.Empty,
-            v => config.MicrosoftUuid = string.IsNullOrWhiteSpace(v) ? null : v.Trim()));
+            var selectedId = AccountManager.SelectedId;
+
+            foreach (var account in accounts)
+            {
+                var row = new Grid { ColumnSpacing = 8 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+                var radio = new RadioButton
+                {
+                    Content = account.DisplayText,
+                    GroupName = "llcl-account",
+                    IsChecked = account.Id == selectedId,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                radio.Checked += (_, _) => AccountManager.SelectedId = account.Id;
+
+                var del = new Button
+                {
+                    Content = "删除",
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                del.Click += (_, _) =>
+                {
+                    AccountManager.Remove(account.Id);
+                    RebuildAccountList();
+                };
+
+                Grid.SetColumn(radio, 0);
+                Grid.SetColumn(del, 2);
+                row.Children.Add(radio);
+                row.Children.Add(del);
+                listPanel.Children.Add(row);
+            }
+        }
+
+        RebuildAccountList();
+
+        // ---------- 添加账号 ----------
+        panel.Children.Add(Header("添加账号"));
+
+        var offlineBox = new TextBox
+        {
+            Header = "离线用户名",
+            Text = config.OfflineUserName,
+            PlaceholderText = "Player",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        panel.Children.Add(offlineBox);
+
+        var addOffline = new Button { Content = "添加离线账号", Margin = new Thickness(0, 4, 0, 0) };
+        addOffline.Click += (_, _) =>
+        {
+            var name = offlineBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(name)) name = "Player";
+            config.OfflineUserName = name;
+            Save();
+
+            AccountManager.Add(AccountManager.CreateOffline(name));
+            RebuildAccountList();
+        };
+        panel.Children.Add(addOffline);
+
+        var msButton = new Button { Content = "使用微软账号登录", Margin = new Thickness(0, 12, 0, 0) };
+        msButton.Click += async (_, _) =>
+        {
+            msButton.IsEnabled = false;
+            try
+            {
+                var ok = await AccountLoginDialog.LoginMicrosoftAsync(XamlRoot);
+                if (ok) RebuildAccountList();
+            }
+            finally
+            {
+                msButton.IsEnabled = true;
+            }
+        };
+        panel.Children.Add(msButton);
+
+        var tpButton = new Button { Content = "使用第三方账号登录", Margin = new Thickness(0, 8, 0, 0) };
+        tpButton.Click += async (_, _) =>
+        {
+            tpButton.IsEnabled = false;
+            try
+            {
+                var ok = await AccountLoginDialog.LoginThirdPartyAsync(XamlRoot);
+                if (ok) RebuildAccountList();
+            }
+            finally
+            {
+                tpButton.IsEnabled = true;
+            }
+        };
+        panel.Children.Add(tpButton);
     }
 
     #endregion
@@ -456,5 +556,6 @@ public sealed partial class SettingsPage : Page
 
     #endregion
 }
+
 
 
