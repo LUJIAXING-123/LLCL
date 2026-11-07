@@ -182,10 +182,10 @@ public sealed class LauncherConfig
     public string LobbyUserName { get; set; } = string.Empty;
 
     /// <summary>
-    /// 主中继节点。官方默认地址（public.easytier.top / public2.easytier.cn）
-    /// 域名已失效，改用实测可用的社区节点。
+    /// 主中继节点。留空时由动态接口自动选择；
+    /// 此处给出一个实测可用的社区节点作为初值。
     /// </summary>
-    public string EasyTierRelay { get; set; } = "tcp://183.66.27.22:39409";
+    public string EasyTierRelay { get; set; } = "tcp://easytier.weiai.org.cn:11010";
 
     public string ExtraRelayNodes { get; set; } = string.Empty;
     public bool ForceRelay { get; set; }
@@ -249,7 +249,7 @@ public sealed class LauncherConfig
         if (IsDeadRelay(EasyTierRelay))
         {
             Logger.Warn($"中继节点 {EasyTierRelay} 已失效，改用可用节点");
-            EasyTierRelay = "tcp://183.66.27.22:39409";
+            EasyTierRelay = "tcp://easytier.weiai.org.cn:11010";
             changed = true;
         }
 

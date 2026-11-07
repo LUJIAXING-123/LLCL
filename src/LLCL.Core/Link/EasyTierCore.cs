@@ -358,6 +358,14 @@ public sealed class EasyTierCore : IDisposable
         "tcp://public2.easytier.cn:54321"
     ];
 
+    /// <summary>
+    /// EasyTier 社区公共节点监控站。返回 JSON 配置，其中
+    /// publicGroupList 的分组里包含各节点的地址与「可中转 / 禁中转」标注。
+    /// 这是目前最可靠的节点来源，实测可同时连上多个中继。
+    /// </summary>
+    private const string CommunityMonitorUrl =
+        "https://info.qtet.cn/uptime/api/status-page/easytier";
+
     /// <summary>社区维护的节点解析接口，每次请求返回一个可用地址。</summary>
     private static readonly string[] NodeResolverUrls =
     [
@@ -399,7 +407,8 @@ public sealed class EasyTierCore : IDisposable
         // 官方地址已失效，但保留兜底以免未来恢复
         foreach (var node in OfficialFallbackNodes) nodes.Add(node);
 
-        return nodes.Distinct().ToList();
+        // 限制节点数量：过多会拖慢连接建立，PCL-CE 同样限制为 6 个
+        return nodes.Distinct().Take(6).ToList();
     }
 
     /// <summary>
@@ -443,7 +452,66 @@ public sealed class EasyTierCore : IDisposable
             Logger.Warn($"官方中继接口不可用: {ex.Message}");
         }
 
-        // 2. 社区节点解析接口
+        // 2. 社区公共节点监控站：这是目前最可靠的来源，
+        //    实测可同时连上多个中继（Murphy / WIN-JN / kk 等节点）。
+        if (result.Count == 0)
+        {
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(12));
+
+                var json = await Net.Http.GetStringAsync(CommunityMonitorUrl, 1,
+                    TimeSpan.FromSeconds(12), cts.Token).ConfigureAwait(false);
+
+                var node = JsonNode.Parse(json);
+                if (node?["publicGroupList"] is JsonArray groups)
+                {
+                    foreach (var group in groups)
+                    {
+                        var groupName = group?["name"]?.GetValue<string>() ?? string.Empty;
+                        if (!groupName.Contains("社区公共节点", StringComparison.Ordinal)) continue;
+
+                        if (group?["monitorList"] is not JsonArray monitors) continue;
+
+                        foreach (var monitor in monitors)
+                        {
+                            var name = monitor?["name"]?.GetValue<string>() ?? string.Empty;
+
+                            // 名称形如：tcp://easytier.weiai.org.cn:11010（为爱… / 可中转）
+                            // 打码的地址（含 *）跳过，取括号前的地址部分
+                            var addrEnd = name.IndexOf('（');
+                            var address = addrEnd > 0 ? name[..addrEnd].Trim() : name.Trim();
+
+                            // 去掉「[我的]」「[海外]」之类的前缀标签
+                            address = address.TrimStart('[', ']');
+                            address = System.Text.RegularExpressions.Regex
+                                .Replace(address, @"^\[[^\]]*\]", string.Empty).Trim();
+
+                            if (address.Contains('*')) continue;
+                            if (address.Contains("禁中转", StringComparison.Ordinal)) continue;
+
+                            // 只保留 EasyTier 支持的连接协议；
+                            // https:// 与 txt:// 是其它用途的地址，不能作为 peer
+                            var scheme = address.Split("://", 2)[0].ToLowerInvariant();
+                            if (scheme is not ("tcp" or "udp" or "ws" or "wss" or "quic" or "faketcp"))
+                                continue;
+
+                            result.Add(address);
+                        }
+                    }
+                }
+
+                if (result.Count > 0)
+                    Logger.Info($"从社区监控站获取 {result.Count} 个公共中继节点");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"社区监控站不可用: {ex.Message}");
+            }
+        }
+
+        // 3. 社区节点解析接口
         if (result.Count == 0)
         {
             foreach (var url in NodeResolverUrls)
@@ -652,6 +720,9 @@ public sealed class PeerInfo
         }
     }
 }
+
+
+
 
 
 
