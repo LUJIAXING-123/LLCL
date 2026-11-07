@@ -165,7 +165,7 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="130" />
                         </Grid.ColumnDefinitions>
                         <TextBlock x:Name="ResourceTitle" Text="模组" FontSize="18" FontWeight="SemiBold"
                                    VerticalAlignment="Center" />
@@ -177,8 +177,9 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <AutoSuggestBox x:Name="ResourceSearchBox" PlaceholderText="搜索名称或描述"
+                        <AutoSuggestBox x:Name="ResourceSearchBox" PlaceholderText="搜索名称或描述（同时查询 Modrinth 与 CurseForge）"
                                         QuerySubmitted="ResourceSearch_Submitted" />
                         <ListView Grid.Row="1" x:Name="ResourceList" SelectionMode="Single"
                                   SelectionChanged="ResourceList_SelectionChanged" IsItemClickEnabled="True"
@@ -206,6 +207,26 @@
                                 </DataTemplate>
                             </ListView.ItemTemplate>
                         </ListView>
+                        <Grid Grid.Row="2" Margin="0,8,0,0" ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                                <Button x:Name="FirstPageButton" Content="«" Click="FirstPage_Click" />
+                                <Button x:Name="PrevPageButton" Content="‹" Click="PrevPage_Click" />
+                                <TextBlock x:Name="PageText" Text="1" VerticalAlignment="Center"
+                                           MinWidth="40" TextAlignment="Center"
+                                           FontWeight="SemiBold" FontSize="15" />
+                                <Button x:Name="NextPageButton" Content="›" Click="NextPage_Click" />
+                            </StackPanel>
+
+                            <ProgressBar x:Name="LoadMoreProgress" Grid.Column="1" IsIndeterminate="True"
+                                         Height="3" Width="120" VerticalAlignment="Bottom"
+                                         Visibility="Collapsed" />
+                        </Grid>
                     </Grid>
                 </Grid>
 

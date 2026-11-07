@@ -36,8 +36,15 @@ public sealed partial class DownloadPage : Page
         ResourceList.ItemsSource = _resources;
         TaskList.ItemsSource = _tasks;
 
+        // 来源选择：默认全部，合并两个源一起展示
+        ResourceSourceCombo.Items.Add("全部");
         ResourceSourceCombo.Items.Add("Modrinth");
         ResourceSourceCombo.Items.Add("CurseForge");
+        ResourceSourceCombo.SelectedIndex = 0;
+        ResourceSourceCombo.SelectionChanged += (_, _) =>
+        {
+            if (_loaded) _ = SearchResourcesAsync();
+        };
 
         DownloadQueue.Changed += OnQueueChanged;
         VersionManager.VersionsChanged += OnVersionsChanged;
@@ -107,7 +114,67 @@ public sealed partial class DownloadPage : Page
         // 后台预热四种加载器版本，切过去时无需等待网络
         var defaultMc = McVersionCombo.SelectedItem as string;
         if (!string.IsNullOrEmpty(defaultMc)) PrefetchLoaders(defaultMc);
+
+        // 后台预热社区资源首页，切到模组/整合包等分类时立即出结果
+        PrefetchResources();
     }
+
+    /// <summary>
+    /// 预热社区资源的分类首页。
+    /// <para>
+    /// 资源搜索要同时请求 Modrinth 与 CurseForge，首次进入往往要等好几秒。
+    /// 这里在后台提前取好四类结果的首屏并缓存，用户切过去时直接命中缓存。
+    /// 缓存带过期时间，避免显示过时数据。
+    /// </para>
+    /// </summary>
+    private void PrefetchResources()
+    {
+        var types = new[]
+        {
+            ResourceType.Mod, ResourceType.Modpack,
+            ResourceType.ResourcePack, ResourceType.Shader
+        };
+
+        foreach (var type in types)
+        {
+            if (_resourceCache.TryGetValue(type, out var cached) &&
+                DateTime.Now < cached.Expire) continue;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var hits = await ResourceService.SearchModrinthAsync(string.Empty, type,
+                        limit: ResourcePageSize, offset: 0);
+                    var cf = await ResourceService.SearchCurseForgeAsync(string.Empty, type,
+                        limit: ResourcePageSize, offset: 0);
+
+                    var merged = hits.Concat(cf).ToList();
+
+                    _resourceCache[type] = new ResourceCacheEntry
+                    {
+                        Hits = merged,
+                        Expire = DateTime.Now.AddMinutes(10)
+                    };
+
+                    Logger.Info($"预热资源 {type}: {merged.Count} 条");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"预热资源 {type} 失败: {ex.Message}");
+                }
+            });
+        }
+    }
+
+    /// <summary>资源首页缓存条目。</summary>
+    private sealed class ResourceCacheEntry
+    {
+        public List<ResourceHit> Hits { get; init; } = [];
+        public DateTime Expire { get; init; }
+    }
+
+    private readonly Dictionary<ResourceType, ResourceCacheEntry> _resourceCache = new();
 
     #endregion
 
@@ -524,55 +591,194 @@ public sealed partial class DownloadPage : Page
         if (e.ClickedItem is ResourceCard card) ResourceList.SelectedItem = card;
     }
 
+    /// <summary>当前资源搜索的页码（从 1 开始）。</summary>
+    private int _resourcePage = 1;
+
+    /// <summary>上一次搜索使用的关键词与条件，供翻页时复用。</summary>
+    private string _resourceQuery = string.Empty;
+    private string? _resourceGameVersion;
+    private ResourceType _resourceType;
+
+    /// <summary>每页条数。两个源合并后单页最多为此值的两倍。</summary>
+    private const int ResourcePageSize = 20;
+
+    /// <summary>是否正在加载，避免重复请求。</summary>
+    private bool _loadingMore;
+
     private async Task SearchResourcesAsync()
     {
         if (_busy || !_loaded) return;
         if (ResourceSearchBox is null || ResourceList is null ||
-            ResourceVersionCombo is null || ResourceSourceCombo is null) return;
+            ResourceVersionCombo is null) return;
 
         var query = ResourceSearchBox.Text?.Trim() ?? string.Empty;
 
         var gameVersion = ResourceVersionCombo.SelectedItem as string;
         if (gameVersion is "全部版本") gameVersion = null;
 
-        var useCf = ResourceSourceCombo.SelectedIndex == 1;
-        var type = CurrentResourceType();
+        _resourceQuery = query;
+        _resourceGameVersion = gameVersion;
+        _resourceType = CurrentResourceType();
 
-        SelectedText.Text = "正在搜索…";
-        _resources.Clear();
+        await LoadResourcePageAsync(1);
+    }
+
+    /// <summary>
+    /// 加载指定页并替换列表内容。分页模式而非追加上限，
+    /// 因为两个源的搜索接口单次最多返回固定条数，
+    /// 用页码翻页比「加载更多」更直观。
+    /// </summary>
+    private async Task LoadResourcePageAsync(int page)
+    {
+        if (_loadingMore) return;
+
+        _loadingMore = true;
+        SelectedText.Text = $"正在加载第 {page} 页…";
+        Dispatch(() => LoadMoreProgress.Visibility = Visibility.Visible);
 
         try
         {
-            var hits = useCf
-                ? await ResourceService.SearchCurseForgeAsync(query, type, gameVersion)
-                : await ResourceService.SearchModrinthAsync(query, type, gameVersion);
-
-            if (hits.Count == 0 && !useCf)
-                hits = await ResourceService.SearchCurseForgeAsync(query, type, gameVersion);
-
-            foreach (var hit in hits)
+            // 首页且无关键词时优先用预热缓存，避免重复请求
+            List<ResourceHit>? cached = null;
+            if (page == 1 &&
+                string.IsNullOrWhiteSpace(_resourceQuery) &&
+                (_resourceGameVersion is null) &&
+                (ResourceSourceCombo?.SelectedIndex ?? 0) == 0 &&
+                _resourceCache.TryGetValue(_resourceType, out var entry) &&
+                DateTime.Now < entry.Expire)
             {
-                _resources.Add(new ResourceCard
-                {
-                    Id = hit.Id,
-                    Name = hit.Name,
-                    Summary = hit.Description,
-                    Source = hit.Source == ResourceSource.Modrinth ? "Modrinth" : "CurseForge",
-                    Meta = $"下载 {FormatDownloads(hit.Downloads)}" +
-                           (string.IsNullOrEmpty(hit.Author) ? string.Empty : $" · {hit.Author}")
-                });
+                cached = entry.Hits;
             }
 
-            SelectedText.Text = hits.Count == 0
-                ? "没有找到结果，试试其他关键词或切换来源"
-                : $"找到 {hits.Count} 个结果";
+            var batch = cached ?? await FetchResourceBatchAsync((page - 1) * ResourcePageSize, default);
+
+            _resourcePage = page;
+            _resources.Clear();
+            foreach (var hit in batch) _resources.Add(ToCard(hit));
+
+            if (batch.Count == 0 && page > 1)
+            {
+                // 翻过头了，退回上一页
+                _resourcePage = page - 1;
+                SelectedText.Text = $"已经是最后一页（共 {page - 1} 页）";
+            }
+            else
+            {
+                SelectedText.Text = batch.Count == 0
+                    ? "没有找到结果，试试其他关键词或切换类型"
+                    : $"第 {page} 页 · 共 {_resources.Count} 个结果";
+            }
+
+            UpdatePageButtons();
         }
         catch (Exception ex)
         {
             SelectedText.Text = "搜索失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
             Logger.Error(ex, "搜索社区资源失败");
         }
+        finally
+        {
+            _loadingMore = false;
+            Dispatch(() => LoadMoreProgress.Visibility = Visibility.Collapsed);
+        }
     }
+
+    /// <summary>根据当前页与结果数量更新翻页按钮的可用状态。</summary>
+    private void UpdatePageButtons()
+    {
+        if (PageText is null) return;
+
+        PageText.Text = _resourcePage.ToString();
+
+        var hasPrev = _resourcePage > 1;
+        if (PrevPageButton is not null) PrevPageButton.IsEnabled = hasPrev;
+        if (FirstPageButton is not null) FirstPageButton.IsEnabled = hasPrev;
+
+        // 下一页：本页有结果就当作还有更多（服务端总数未知，按实际返回判断）
+        var hasNext = _resources.Count > 0;
+        if (NextPageButton is not null) NextPageButton.IsEnabled = hasNext;
+    }
+
+    private void FirstPage_Click(object sender, RoutedEventArgs e)
+    {
+        if (_resourcePage > 1) _ = LoadResourcePageAsync(1);
+    }
+
+    private void PrevPage_Click(object sender, RoutedEventArgs e)
+    {
+        if (_resourcePage > 1) _ = LoadResourcePageAsync(_resourcePage - 1);
+    }
+
+    private void NextPage_Click(object sender, RoutedEventArgs e)
+    {
+        _ = LoadResourcePageAsync(_resourcePage + 1);
+    }
+
+    /// <summary>
+    /// 取一批结果。根据顶栏的来源选择决定查询方式：
+    /// 全部 = 两个源并行合并，Modrinth / CurseForge = 只查对应源。
+    /// </summary>
+    private async Task<List<ResourceHit>> FetchResourceBatchAsync(int offset, CancellationToken ct)
+    {
+        var query = _resourceQuery;
+        var gameVersion = _resourceGameVersion;
+        var type = _resourceType;
+
+        // 0=全部 1=Modrinth 2=CurseForge
+        var sourceIndex = ResourceSourceCombo?.SelectedIndex ?? 0;
+
+        var results = new List<ResourceHit>();
+
+        if (sourceIndex is 0 or 1)
+        {
+            try
+            {
+                results.AddRange(await ResourceService.SearchModrinthAsync(query, type, gameVersion,
+                    limit: ResourcePageSize, offset: offset, ct: ct));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Modrinth 搜索失败: {ex.Message}");
+            }
+        }
+
+        if (sourceIndex is 0 or 2)
+        {
+            try
+            {
+                results.AddRange(await ResourceService.SearchCurseForgeAsync(query, type, gameVersion,
+                    limit: ResourcePageSize, offset: offset, ct: ct));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"CurseForge 搜索失败: {ex.Message}");
+            }
+        }
+
+        // 去重：同一项目在两个源都可能出现，按名称 + 来源组合保留
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var merged = new List<ResourceHit>();
+
+        foreach (var hit in results.OrderByDescending(h => h.Downloads))
+        {
+            var key = $"{hit.Name}|{hit.Author}";
+            if (!seen.Add(key)) continue;
+            merged.Add(hit);
+        }
+
+        return merged;
+    }
+
+    /// <summary>把搜索结果转换成列表项。</summary>
+    private static ResourceCard ToCard(ResourceHit hit) => new()
+    {
+        Id = hit.Id,
+        Name = hit.Name,
+        Summary = hit.Description,
+        Source = hit.Source == ResourceSource.Modrinth ? "Modrinth" : "CurseForge",
+        Meta = $"下载 {FormatDownloads(hit.Downloads)}" +
+               (string.IsNullOrEmpty(hit.Author) ? string.Empty : $" · {hit.Author}")
+    };
 
     private static string FormatDownloads(long count)
     {
@@ -1035,6 +1241,14 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
+
+
+
+
+
+
+
 
 
 
