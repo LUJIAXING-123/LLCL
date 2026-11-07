@@ -1,4 +1,5 @@
 using LLCL.Core;
+using LLCL.Core.Account;
 using LLCL.Core.Link;
 using LLCL.Core.Minecraft;
 using LLCL.Services;
@@ -19,6 +20,16 @@ public sealed partial class HomePage : Page
 
         // 版本新增 / 删除 / 重命名后自动刷新，避免界面显示过期数据
         VersionManager.VersionsChanged += OnVersionsChanged;
+
+        // 账号切换或新增后刷新显示
+        AccountManager.Changed += OnAccountsChanged;
+    }
+
+    /// <summary>账号新增、切换或删除后刷新首页显示。</summary>
+    private void OnAccountsChanged()
+    {
+        if (DispatcherQueue is null) return;
+        DispatcherQueue.TryEnqueue(Refresh);
     }
 
     private void OnVersionsChanged()
@@ -29,11 +40,22 @@ public sealed partial class HomePage : Page
     private void Refresh()
     {
         var config = LauncherConfig.Current;
-        GreetingText.Text = $"你好，{config.DisplayAccountName}";
+
+        // 账号显示以账号管理器的当前选中项为准，
+        // 没有选中账号时退回离线用户名
+        var account = AccountManager.Selected;
+        var displayName = account?.Name ?? config.OfflineUserName;
+
+        GreetingText.Text = $"你好，{displayName}";
         SubGreetingText.Text = $"{DateTime.Now:yyyy年M月d日} · {LauncherInfo.ProductShortName} {LauncherInfo.Version}";
-        AccountButton.Content = config.AccountType == "microsoft"
-            ? config.MicrosoftUserName ?? "微软账号"
-            : $"离线 · {config.OfflineUserName}";
+
+        AccountButton.Content = account switch
+        {
+            null => $"离线 · {config.OfflineUserName}",
+            { Kind: AccountKind.Microsoft } => $"微软 · {account.Name}",
+            { Kind: AccountKind.ThirdParty } => $"第三方 · {account.Name}",
+            _ => $"离线 · {account.Name}"
+        };
 
         // 使用版本管理器的顺序与自定义显示名
         var entries = VersionManager.ScanAll().Where(e => !e.IsBroken).ToList();
@@ -225,6 +247,7 @@ public sealed partial class HomePage : Page
         MainWindow.Instance?.ShowVersionSettings(version);
     }
 }
+
 
 
 
