@@ -83,7 +83,8 @@ public sealed class LauncherConfig
     // ---------- 下载 ----------
     public DownloadSource Source { get; set; } = DownloadSource.Auto;
     public string CustomSourceUrl { get; set; } = "https://bmclapi2.bangbang93.com";
-    public int DownloadThreads { get; set; } = 64;
+    /// <summary>下载线程数。过高会被镜像站限流，反而导致大量失败。</summary>
+    public int DownloadThreads { get; set; } = 16;
     public int DownloadRetry { get; set; } = 3;
     public int DownloadSpeedLimitKb { get; set; } = 0; // 0 = 不限速
 
@@ -133,6 +134,19 @@ public sealed class LauncherConfig
 
     public static event Action? OnChanged;
 
+    /// <summary>
+    /// 配置迁移：修正历史版本遗留的过激默认值。
+    /// 早期默认 64 线程会触发镜像站限流，导致大量下载失败。
+    /// </summary>
+    private void Migrate()
+    {
+        if (DownloadThreads > 32)
+        {
+            Logger.Warn($"下载线程数 {DownloadThreads} 过高，已调整为 16 以避免镜像站限流");
+            DownloadThreads = 16;
+            Save();
+        }
+    }
     public static void Load()
     {
         try
@@ -148,6 +162,9 @@ public sealed class LauncherConfig
                 _current = new LauncherConfig();
                 _current.Save();
             }
+
+            // 修正历史遗留的过激配置
+            _current.Migrate();
         }
         catch (Exception ex)
         {
@@ -181,6 +198,8 @@ public sealed class LauncherConfig
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 }
+
+
 
 
 

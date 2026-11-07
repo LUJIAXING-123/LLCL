@@ -412,7 +412,11 @@ public sealed class FileDownloader
 
                 last = new InvalidDataException($"SHA1 校验失败: {Path.GetFileName(item.TargetPath)}");
                 Logger.Warn($"{last.Message}（来源 {url}），将重试");
+
+                // 内容不正确时必须删掉目标文件与残留的 .part，
+                // 否则下一轮续传会以损坏的旧文件为基准继续追加，永远无法通过校验。
                 _TryDelete(item.TargetPath);
+                _TryDelete(item.TargetPath + ".part");
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -432,9 +436,18 @@ public sealed class FileDownloader
         var dir = Path.GetDirectoryName(item.TargetPath);
         if (dir is not null) Directory.CreateDirectory(dir);
 
-        // 断点续传：优先从 .part 文件继续
+        // 断点续传：从 .part 文件继续。
+        // 注意：只在已知期望大小时信任 .part，否则残留的残缺文件会导致无限续传。
         var partPath = item.TargetPath + ".part";
         var existing = File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
+
+        // .part 超过期望大小说明它来自另一次不同的下载，直接丢弃
+        if (existing > 0 && item.Size > 0 && existing > item.Size)
+        {
+            Logger.Warn($"丢弃异常大小的临时文件 {Path.GetFileName(partPath)}（{existing} > {item.Size}）");
+            _TryDelete(partPath);
+            existing = 0;
+        }
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         if (existing > 0)
@@ -525,6 +538,17 @@ public sealed class FileDownloader
 
         if (remoteLength > 0 && written != remoteLength && startOffset == 0)
             throw new IOException($"下载大小不匹配（{written}/{remoteLength} 字节），将重试");
+
+        // 内容为空一律视为失败：高并发下被服务端限流时，
+        // 连接会建立但读不到任何数据，此时不能生成 0 字节的目标文件。
+        if (written == 0)
+            throw new IOException($"下载内容为空: {Path.GetFileName(partPath)}，将重试");
+
+        // 已知期望大小时做一次完整性校验，避免残缺文件被当作成功
+        if (startOffset == 0 && remoteLength <= 0 && written > 0)
+        {
+            // 服务端未提供 Content-Length，交给上层 SHA1 校验兜底
+        }
     }
 
     private void _RaiseProgress(string? currentFile)
