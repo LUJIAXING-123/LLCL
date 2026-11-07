@@ -289,11 +289,28 @@ public static class MicrosoftAuth
             ["identityToken"] = $"XBL3.0 x={uhs};{xstsToken}"
         };
 
-        var mc = await _PostJsonAsync(McLoginUrl, mcPayload, ct).ConfigureAwait(false);
-        var mcToken = mc?["access_token"]?.GetValue<string>()
-                      ?? throw new AuthException("获取 Minecraft 令牌失败，请确认该账号已购买游戏");
+        var (mc, mcStatus) = await _PostJsonWithStatusAsync(McLoginUrl, mcPayload, ct)
+            .ConfigureAwait(false);
 
-        progress?.Invoke("正在读取游戏档案…");
+        var mcToken = mc?["access_token"]?.GetValue<string>();
+
+        if (mcToken is null)
+        {
+            Logger.Warn($"Minecraft 登录失败 HTTP {mcStatus}: {mc?.ToJsonString() ?? "空响应"}");
+
+            // 401/403 通常意味着该账号没有 Minecraft 授权
+            if (mcStatus is 401 or 403)
+            {
+                throw new AuthException(
+                    "该微软账号没有购买 Minecraft。\n" +
+                    "请确认登录的账号与购买游戏时使用的是同一个微软账号。");
+            }
+
+            throw new AuthException(
+                $"获取 Minecraft 令牌失败（HTTP {mcStatus}），请检查网络后重试");
+        }
+
+        progress?.Invoke("正在确认游戏所有权…");
 
         // 4. 档案（确认是否拥有游戏）
         var profileResult = await _GetJsonWithStatusAsync(McProfileUrl, mcToken, ct)
@@ -334,6 +351,38 @@ public static class MicrosoftAuth
         };
     }
 
+    /// <summary>带状态码的 POST，便于区分认证失败与网络故障。</summary>
+    private static async Task<(JsonNode? Node, int Status)> _PostJsonWithStatusAsync(string url,
+        JsonObject payload, CancellationToken ct)
+    {
+        try
+        {
+            using var resp = await Net.Http.Client.PostAsync(url,
+                new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json"),
+                ct).ConfigureAwait(false);
+
+            var status = (int)resp.StatusCode;
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+            if (body.Length == 0)
+            {
+                Logger.Warn($"{url} 返回空响应（HTTP {status}）");
+                return (null, status);
+            }
+
+            var node = JsonNode.Parse(body);
+
+            if (!resp.IsSuccessStatusCode)
+                Logger.Warn($"{url} 返回 HTTP {status}：{body[..Math.Min(250, body.Length)]}");
+
+            return (node, status);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"请求 {url} 失败: {ex.Message}");
+            return (null, 0);
+        }
+    }
     private static async Task<JsonNode?> _PostJsonAsync(string url, JsonObject payload,
         CancellationToken ct)
     {
@@ -408,6 +457,7 @@ public static class MicrosoftAuth
         try { return JsonNode.Parse(body); } catch { return null; }
     }
 }
+
 
 
 
