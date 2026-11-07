@@ -104,8 +104,15 @@ public static class FriendlyError
         return $"{message.Text}\n{message.Suggestion}";
     }
 
-    /// <summary>聊特定端口是否可用。</summary>
-    public static bool IsPortAvailable(int port, out string? error)
+    /// <summary>
+    /// 检查该端口上是否有程序在监听（即 Minecraft 局域网世界是否已开放）。
+    /// <para>
+    /// 这里做的是「能否连上」而不是「能否绑定」：
+    /// 目标端口通常正被游戏自身占用，绑定必然失败，
+    /// 但那不影响房间功能——LLCL 只是把该端口转发到虚拟网络。
+    /// </para>
+    /// </summary>
+    public static bool IsPortReachable(int port, out string? error)
     {
         error = null;
 
@@ -122,21 +129,32 @@ public static class FriendlyError
 
         try
         {
-            using var listener = new TcpListener(System.Net.IPAddress.Loopback, port);
-            listener.Start();
-            listener.Stop();
+            // 注意：不要用 TcpListener 绑定该端口来判断可用性。
+            // 这个端口通常是 Minecraft 局域网世界"自己正在监听"的端口，
+            // 绑定它必然失败（AddressAlreadyInUse / AccessDenied），
+            // 但这对 LLCL 没有影响：房间只是把该端口转发到虚拟网络。
+            // 真正需要确认的是"能否连接到它"，即它确实有人在监听。
+            using var probe = new System.Net.Sockets.TcpClient();
+            var connect = probe.ConnectAsync(System.Net.IPAddress.Loopback, port);
+
+            if (!connect.Wait(ProbeTimeout))
+            {
+                error = $"端口 {port} 上没有检测到运行中的游戏。\n" +
+                        "请先在游戏里执行「对局域网开放」，或确认下方端口与游戏内显示的端口一致。";
+                return false;
+            }
+
+            probe.Close();
             return true;
+        }
+        catch (AggregateException ex) when (ex.InnerException is SocketException se)
+        {
+            error = _PortConnectError(port, se);
+            return false;
         }
         catch (SocketException ex)
         {
-            error = ex.SocketErrorCode switch
-            {
-                global::System.Net.Sockets.SocketError.AddressAlreadyInUse =>
-                    $"端口 {port} 已被其他程序占用，请换一个端口（例如 {SuggestPort()}）。",
-                global::System.Net.Sockets.SocketError.AccessDenied =>
-                    $"端口 {port} 需要管理员权限才能使用，建议改用 1024 以上的端口。",
-                _ => $"端口 {port} 不可用（{ex.SocketErrorCode}），请换一个端口。"
-            };
+            error = _PortConnectError(port, ex);
             return false;
         }
         catch (Exception ex)
@@ -146,14 +164,43 @@ public static class FriendlyError
         }
     }
 
-    /// <summary>找一个空闲的本地端口。</summary>
+    /// <summary>端口连通性检测的超时时间。</summary>
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>把连接阶段的 SocketException 翻译成用户能懂的说明。</summary>
+    private static string _PortConnectError(int port, SocketException ex)
+    {
+        return ex.SocketErrorCode switch
+        {
+            global::System.Net.Sockets.SocketError.ConnectionRefused =>
+                $"端口 {port} 上没有检测到运行中的游戏。\n" +
+                "请先在游戏里执行「对局域网开放」，或确认端口与游戏内显示的一致。",
+            global::System.Net.Sockets.SocketError.AccessDenied =>
+                $"系统拒绝了到端口 {port} 的连接，可能是防火墙拦截。",
+            _ => $"端口 {port} 无法连接（{ex.SocketErrorCode}）。" +
+                 "请确认游戏已对局域网开放，且端口填写正确。"
+        };
+    }
+
+    /// <summary>找一个可以绑定的空闲本地端口（用于 EasyTier 等自用端口）。</summary>
     public static int SuggestPort(int start = 25565)
     {
         for (var offset = 0; offset < 200; offset++)
         {
             var candidate = start + offset;
             if (candidate > 65535) break;
-            if (IsPortAvailable(candidate, out _)) return candidate;
+
+            try
+            {
+                using var listener = new TcpListener(System.Net.IPAddress.Loopback, candidate);
+                listener.Start();
+                listener.Stop();
+                return candidate;
+            }
+            catch
+            {
+                // 该端口被占用，继续尝试下一个
+            }
         }
 
         return 0;

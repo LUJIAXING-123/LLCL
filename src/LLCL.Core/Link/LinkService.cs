@@ -201,7 +201,7 @@ public sealed class LinkService : IAsyncDisposable
         DisplayName = string.IsNullOrWhiteSpace(displayName) ? "Player" : displayName.Trim();
 
         // 端口合法性前置检查，避免把底层 SocketException 直接抛给用户
-        if (!FriendlyError.IsPortAvailable(mcPort, out var portError))
+        if (!FriendlyError.IsPortReachable(mcPort, out var portError))
         {
             _SetState(LinkState.Error, portError ?? "端口不可用");
             return false;
@@ -554,3 +554,4 @@ public sealed class TcpForwarder : IDisposable
         Stop();
     }
 }
+

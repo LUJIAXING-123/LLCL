@@ -217,7 +217,7 @@ public sealed partial class LinkPage : Page
             return;
         }
 
-        if (!FriendlyError.IsPortAvailable(port, out var portError))
+        if (!FriendlyError.IsPortReachable(port, out var portError))
         {
             ShowStatus(portError ?? "端口不可用", InfoBarSeverity.Error);
             return;
@@ -384,4 +384,5 @@ public sealed partial class LinkPage : Page
 
     #endregion
 }
+
 
