@@ -16,8 +16,16 @@ namespace LLCL.Core.Account;
 /// </summary>
 public static class MicrosoftAuth
 {
-    /// <summary>Minecraft 启动器使用的公共客户端 ID（各启动器通用）。</summary>
-    private const string ClientId = "00000000402b5328";
+    /// <summary>
+    /// 微软账号登录客户端 ID。
+    /// <para>
+    /// 00000000402b5328 是最老的 Xbox Live 客户端 ID，实测它能通过
+    /// XBL 与 XSTS，但 Minecraft 服务拒绝签发令牌（403）。
+    /// 改用 Xbox 应用所用的 00000000441cc96b，该 ID 拥有完整的
+    /// Minecraft 服务权限。
+    /// </para>
+    /// </summary>
+    private const string ClientId = "00000000441cc96b";
 
     private const string DeviceCodeUrl =
         "https://login.live.com/oauth20_connect.srf";
@@ -27,11 +35,13 @@ public static class MicrosoftAuth
 
     /// <summary>
     /// 授权范围。
-    /// MBI_SSL 是 Minecraft 服务要求的经典 scope：
-    /// 只有带该 scope 的令牌，XSTS 才能为 rp://api.minecraftservices.com/ 签发可用凭据。
-    /// 若换成 XboxLive.signin，XSTS 能通过但 login_with_xbox 会一律返回 403。
+    /// <para>
+    /// 与 PCL-CE 保持一致使用 XboxLive.signin offline_access：
+    /// XboxLive.signin 授予 Xbox 服务访问权，offline_access 允许获取刷新令牌。
+    /// MBI_SSL 是更早的写法，已不适用于当前 Minecraft 服务。
+    /// </para>
     /// </summary>
-    private const string Scope = "service::user.auth.xboxlive.com::MBI_SSL";
+    private const string Scope = "XboxLive.signin offline_access";
 
     private const string XblUrl = "https://user.auth.xboxlive.com/user/authenticate";
     private const string XstsUrl = "https://xsts.auth.xboxlive.com/xsts/authorize";
@@ -287,6 +297,15 @@ public static class MicrosoftAuth
         // userHash 必须从 XSTS 响应里取，XBL 响应里的 uhs 不能直接用于 Minecraft 登录
         var uhs = xsts["DisplayClaims"]?["xui"]?[0]?["uhs"]?.GetValue<string>()
                     ?? throw new AuthException("XSTS 返回数据缺少用户哈希");
+
+        // 诊断：把 XSTS 响应的完整结构记入日志，
+        // 便于判断当前登录的是哪个账号、令牌是否真的带有 Minecraft 权限
+        try
+        {
+            Logger.Info($"[认证诊断] XSTS 响应: {xsts.ToJsonString()}");
+            Logger.Info($"[认证诊断] 使用的 ClientId: {ClientId}");
+        }
+        catch { }
 
         progress?.Invoke("正在获取 Minecraft 令牌…");
 

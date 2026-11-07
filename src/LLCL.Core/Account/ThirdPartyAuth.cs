@@ -143,40 +143,62 @@ public static class ThirdPartyAuth
     }
 
     /// <summary>
-    /// 探测验证服务器：Yggdrasil 的 /authserver 根路径应返回 API 元信息。
+    /// 探测验证服务器：Yggdrasil 元信息接口应返回 skinDomains 等字段。
     /// </summary>
     private static async Task _ProbeAsync(string baseUrl, CancellationToken ct)
     {
         try
         {
-            var text = await Net.Http.GetStringAsync(
-                baseUrl.Replace("/authserver", "/api/yggdrasil", StringComparison.OrdinalIgnoreCase),
-                1, TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+            var text = await Net.Http.GetStringAsync(baseUrl, 1, TimeSpan.FromSeconds(10), ct)
+                .ConfigureAwait(false);
 
             var node = JsonNode.Parse(text);
+            var serverName = node?["meta"]?["serverName"]?.GetValue<string>();
             var skinDomains = node?["skinDomains"];
+
             if (skinDomains is not null)
-                Logger.Info($"验证服务器 {baseUrl} 可用，皮肤域名 {skinDomains.ToJsonString()}");
+                Logger.Info($"验证服务器 {serverName ?? baseUrl} 可用，" +
+                            $"皮肤域名 {skinDomains.ToJsonString()}");
+            else
+                Logger.Warn($"验证服务器 {baseUrl} 未返回 skinDomains，可能不兼容 authlib-injector");
         }
         catch (Exception ex)
         {
-            Logger.Debug($"验证服务器探测失败（继续尝试登录）: {ex.Message}");
+            Logger.Warn($"验证服务器探测失败 {baseUrl}: {ex.Message}");
         }
     }
 
-    /// <summary>规范化服务器地址：补全到 /authserver 结尾。</summary>
+    /// <summary>
+    /// 规范化服务器地址：返回 authlib-injector 的 API 根地址。
+    /// <para>
+    /// 该根地址用于两处：作为 -javaagent 注入参数，
+    /// 以及在其后追加 /authserver/xxx 等标准路径调用接口。
+    /// LittleSkin 的正确根地址是 https://littleskin.cn/api/yggdrasil，
+    /// 追加 /authserver 才能访问认证接口；旧实现误把根地址改成 /authserver，
+    /// 导致所有请求命中 404，登录一律报「账号或密码错误」。
+    /// </para>
+    /// </summary>
     public static string NormalizeServerUrl(string url)
     {
         var u = url.Trim().TrimEnd('/');
 
-        // LittleSkin 常见写法：填 https://littleskin.cn 或 .../api/yggdrasil
-        if (u.Contains("/api/yggdrasil", StringComparison.OrdinalIgnoreCase))
-            return u.Replace("/api/yggdrasil", "/authserver", StringComparison.OrdinalIgnoreCase);
+        // 已经是完整的 authserver 路径：退回上一级作为根
+        var authIndex = u.IndexOf("/authserver", StringComparison.OrdinalIgnoreCase);
+        if (authIndex > 0) u = u[..authIndex];
 
-        if (u.EndsWith("/authserver", StringComparison.OrdinalIgnoreCase)) return u;
+        // 已经以 API 根结尾，直接使用
+        if (u.EndsWith("/api/yggdrasil", StringComparison.OrdinalIgnoreCase)) return u;
 
-        return u + "/authserver";
+        // 用户只填了域名（如 https://littleskin.cn），补全为标准路径
+        var uri = new Uri(u);
+        if (string.IsNullOrEmpty(uri.AbsolutePath.Trim('/'))) return u + "/api/yggdrasil";
+
+        // 其它自定义路径按原样使用
+        return u;
     }
+
+    /// <summary>认证接口地址：yggdrasil 根 + /authserver/xxx。</summary>
+    private static string AuthUrl(string root, string action) => $"{root}/authserver/{action}";
 
     private static async Task<JsonNode?> _PostAsync(string url, JsonObject payload, CancellationToken ct)
     {
@@ -190,16 +212,53 @@ public static class ThirdPartyAuth
 
             if (!resp.IsSuccessStatusCode)
             {
-                Logger.Warn($"验证服务器返回 {resp.StatusCode}: {body[..Math.Min(200, body.Length)]}");
+                var status = (int)resp.StatusCode;
+                Logger.Warn($"验证服务器返回 {status}: {body[..Math.Min(200, body.Length)]}");
+
+                // 403 通常是账号或密码错误，404 说明地址不对
+                if (status is 403 or 401)
+                {
+                    var message = _ReadErrorMessage(body) ?? "用户名或密码错误";
+                    throw new AuthException(message);
+                }
+
+                if (status == 404)
+                    throw new AuthException(
+                        "验证服务器地址不正确。\n" +
+                        "LittleSkin 应填写 https://littleskin.cn/api/yggdrasil");
+
                 return null;
             }
 
             return JsonNode.Parse(body);
         }
+        catch (AuthException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             Logger.Warn($"请求验证服务器失败 {url}: {ex.Message}");
-            throw new AuthException("无法连接验证服务器，请检查地址是否正确", ex);
+            throw new AuthException("无法连接验证服务器，请检查网络与地址是否正确", ex);
+        }
+    }
+
+    /// <summary>从 Yggdrasil 错误响应中取出可读的错误说明。</summary>
+    private static string? _ReadErrorMessage(string body)
+    {
+        try
+        {
+            var node = JsonNode.Parse(body);
+            var message = node?["errorMessage"]?.GetValue<string>();
+            if (string.IsNullOrWhiteSpace(message)) return null;
+
+            // 部分站点的说明含英文，只保留中文部分
+            var dotIndex = message.IndexOf('.');
+            return dotIndex > 0 ? message[..dotIndex] : message;
+        }
+        catch
+        {
+            return null;
         }
     }
 }
