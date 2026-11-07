@@ -11,11 +11,14 @@ namespace LLCL.Core.Minecraft;
 /// </summary>
 public static class AuthlibInjector
 {
-    /// <summary>BMCLAPI 提供的镜像（官方源在国内较慢）。</summary>
-    private const string DownloadUrlsFirst =
-        "https://bmclapi2.bangbang93.com/maven/org/yggdrasilmc/authlib-injector/download";
+    /// <summary>
+    /// 官方制品索引。返回 JSON，含最新版本的下载地址与校验值。
+    /// 该接口实测可用（约 500ms），比 GitHub Releases 稳定。
+    /// </summary>
+    private const string ArtifactIndexUrl =
+        "https://authlib-injector.yushi.moe/artifact/latest.json";
 
-    /// <summary>GitHub 官方发布页（镜像失效时回退）。</summary>
+    /// <summary>GitHub 官方发布页（索引失效时回退）。</summary>
     private const string ReleaseApiUrl =
         "https://api.github.com/repos/yushijinhun/authlib-injector/releases/latest";
 
@@ -102,19 +105,47 @@ public static class AuthlibInjector
 
     private static async Task<string?> _DownloadAsync(CancellationToken ct)
     {
-        // 优先镜像
+        // 优先官方制品索引：返回 JSON，内含 jar 的实际下载地址
         try
         {
-            var bytes = await Net.Http.GetBytesAsync(DownloadUrlsFirst, ct: ct).ConfigureAwait(false);
-            if (bytes.Length > 100_000 && IsJar(bytes))
+            var json = await Net.Http.GetStringAsync(ArtifactIndexUrl, 1,
+                TimeSpan.FromSeconds(15), ct).ConfigureAwait(false);
+
+            var node = System.Text.Json.Nodes.JsonNode.Parse(json);
+            var downloadUrl = node?["download_url"]?.GetValue<string>();
+            var expectedSha256 = node?["checksums"]?["sha256"]?.GetValue<string>();
+            var version = node?["version"]?.GetValue<string>();
+
+            if (!string.IsNullOrWhiteSpace(downloadUrl))
             {
-                await File.WriteAllBytesAsync(CachedJar, bytes, ct).ConfigureAwait(false);
-                return CachedJar;
+                var bytes = await Net.Http.GetBytesAsync(downloadUrl, ct: ct).ConfigureAwait(false);
+
+                // 校验完整性：索引提供了 sha256，不匹配则视为下载失败
+                if (!string.IsNullOrWhiteSpace(expectedSha256))
+                {
+                    var actual = Convert.ToHexString(
+                        System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+
+                    if (!actual.Equals(expectedSha256.ToLowerInvariant(), StringComparison.Ordinal))
+                    {
+                        Logger.Warn($"authlib-injector 校验失败：期望 {expectedSha256[..16]}…，实际 {actual[..16]}…");
+                        return null;
+                    }
+                }
+
+                if (bytes.Length > 100_000 && IsJar(bytes))
+                {
+                    await File.WriteAllBytesAsync(CachedJar, bytes, ct).ConfigureAwait(false);
+                    Logger.Info($"已下载 authlib-injector {version}");
+                    return CachedJar;
+                }
+
+                Logger.Warn($"官方索引提供的文件不是有效 jar（{bytes.Length} 字节）");
             }
         }
         catch (Exception ex)
         {
-            Logger.Warn($"镜像下载 authlib-injector 失败: {ex.Message}");
+            Logger.Warn($"从官方索引下载 authlib-injector 失败: {ex.Message}");
         }
 
         // 回退 GitHub
