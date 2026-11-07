@@ -132,6 +132,8 @@ public sealed class FileDownloader
     /// </summary>
     public static FileDownloader? Active { get; private set; }
 
+    /// <summary>HEAD 探测超时。不可达源要快速跳过，不能拖慢整体下载。</summary>
+    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(4);
     public event EventHandler<DownloadProgressEventArgs>? Progress;
 
     public DownloadState State { get; private set; } = DownloadState.Idle;
@@ -201,18 +203,24 @@ public sealed class FileDownloader
         State = DownloadState.Running;
 
         // 若有文件大小未知（例如加载器安装器 URL 不提供 size），
-        // 先对这批 URL 做一次 HEAD 探测补全大小，避免界面一直显示“未知”。
+        // 先做 HEAD 探测补全大小，避免界面一直显示“未知”。
+        // 关键：必须并行探测且带短超时。串行探测在不可达源上会逐个等 20 秒，
+        // 十几个库累积就是几分钟，表现为"卡在最后阶段"。
         var unknown = items.Where(i => i.Size <= 0).ToList();
         if (unknown.Count > 0)
         {
-            foreach (var item in unknown)
+            var probeTasks = unknown.Select(async item =>
             {
                 try
                 {
                     var probe = DownloadMirror.MapUrl(item.Url);
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    cts.CancelAfter(ProbeTimeout);
+
                     using var req = new HttpRequestMessage(HttpMethod.Head, probe);
-                    using var resp = await Http.Client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct)
-                        .ConfigureAwait(false);
+                    using var resp = await Http.Client.SendAsync(req,
+                        HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+
                     if (resp.IsSuccessStatusCode && resp.Content.Headers.ContentLength is { } len && len > 0)
                     {
                         item.Size = len;
@@ -223,7 +231,9 @@ public sealed class FileDownloader
                 {
                     Logger.Debug($"探测文件大小失败 {item.Url}: {ex.Message}");
                 }
-            }
+            }).ToArray();
+
+            await Task.WhenAll(probeTasks).ConfigureAwait(false);
         }
 
         _innerCts = new CancellationTokenSource();
@@ -590,6 +600,7 @@ public sealed class FileDownloader
         return $"{kb / 1024:F1} MB/s";
     }
 }
+
 
 
 

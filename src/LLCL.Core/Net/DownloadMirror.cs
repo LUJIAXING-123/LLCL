@@ -59,8 +59,48 @@ public static class DownloadMirror
         if (url.Contains(Libraries, StringComparison.Ordinal))
             return url.Replace(Libraries, baseUrl + "/maven", StringComparison.Ordinal);
 
-        // Forge / NeoForge / Fabric 等元数据走各自 JS 中配置的镜像，不在此处处理
+        // Fabric / Quilt 等第三方 maven：走 BMCLAPI 的 maven 代理
+        // 官方 maven.fabricmc.net 在国内速度极差（常见几 KB/s），必须替换
+        foreach (var thirdParty in ThirdPartyMavens)
+        {
+            if (!url.Contains(thirdParty, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var path = _ExtractMavenPath(url);
+            if (path is not null) return $"{baseUrl}/maven/{path}";
+        }
+
         return url;
+    }
+
+    /// <summary>需要镜像代理的第三方 maven 域名。</summary>
+    private static readonly string[] ThirdPartyMavens =
+    [
+        "maven.fabricmc.net",
+        "maven.quiltmc.org",
+        "libraries.minecraft.net"
+    ];
+
+    /// <summary>从 maven URL 中截取 group/artifact/version/xxx.jar 这段路径。</summary>
+    private static string? _ExtractMavenPath(string url)
+    {
+        try
+        {
+            var uri = new Uri(url);
+            var segments = uri.AbsolutePath.TrimStart('/').Split('/');
+
+            // 找到第一个以 group 域名开头的片段（如 org、net、com）
+            for (var i = 0; i < segments.Length; i++)
+            {
+                if (segments[i] is "org" or "net" or "com" or "io" or "dev") 
+                    return string.Join('/', segments[i..]);
+            }
+
+            return segments.Length > 0 ? string.Join('/', segments) : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>版本 JSON 的下载地址（用于补全缺少 download.url 的情况）。</summary>

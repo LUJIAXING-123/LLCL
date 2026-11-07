@@ -27,7 +27,9 @@ public static class Http
                     {
                         AllowAutoRedirect = true,
                         AutomaticDecompression = DecompressionMethods.All,
-                        ConnectTimeout = TimeSpan.FromSeconds(20),
+                        // 连接超时不宜过长：不可达主机应尽快失败并回退备用源，
+                        // 否则会在慢源上长时间等待，表现为下载卡住
+                        ConnectTimeout = TimeSpan.FromSeconds(8),
                         PooledConnectionLifetime = TimeSpan.FromMinutes(5),
                         MaxConnectionsPerServer = 128
                     };

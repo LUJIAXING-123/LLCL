@@ -503,13 +503,24 @@ public static class LoaderInstaller
             var artifact = lib.Downloads?.Artifact;
             if (artifact is null || string.IsNullOrEmpty(artifact.Url)) continue;
 
-            items.Add(new Net.DownloadItem
+            var item = new Net.DownloadItem
             {
                 Url = artifact.Url,
                 TargetPath = Path.Combine(Paths.LibrariesDir, artifact.Path ?? lib.Coordinate!.ToPath()),
                 Sha1 = artifact.Sha1,
                 Size = artifact.Size
-            });
+            };
+
+            // 备用源：Fabric 官方 maven 在国内速度极差，
+            // 主源走镜像，失败时回退到官方与其他公共镜像
+            if (artifact.Url.Contains("maven.fabricmc.net", StringComparison.OrdinalIgnoreCase))
+            {
+                item.FallbackUrls.Add(artifact.Url);
+                item.FallbackUrls.Add(artifact.Url.Replace("maven.fabricmc.net",
+                    "maven.aliyun.com/repository/public", StringComparison.OrdinalIgnoreCase));
+            }
+
+            items.Add(item);
         }
 
         if (items.Count == 0) return;
