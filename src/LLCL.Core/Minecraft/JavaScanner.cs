@@ -60,7 +60,7 @@ public static class JavaScanner
         }
 
         // 并行调用 java -version，避免逐个等待造成数秒卡顿
-        var result = candidates
+        var parsed = candidates
             .AsParallel()
             .WithDegreeOfParallelism(Math.Clamp(candidates.Count, 1, 8))
             .Select(Parse)
@@ -68,57 +68,253 @@ public static class JavaScanner
             .Select(r => r!)
             .ToList();
 
+        // 去重分两层：
+        // 1) 同一 bin 目录下的 java.exe 与 javaw.exe 属于同一套 JDK
+        // 2) latest\jdk-26 与 jdk-26.0.2 可能是同为 26.0.2 的两份独立副本，
+        //    对启动游戏而言等价，只保留更易识别的一个
+        var result = parsed
+            .GroupBy(r => _RealBinDir(r.Path), StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderBy(ScoreEntry).First())
+            .GroupBy(r => $"{r.MajorVersion}|{r.FullVersion}|{r.Arch}", StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderBy(ScoreEntry).First())
+            .ToList();
+
         result.Sort((a, b) => b.MajorVersion.CompareTo(a.MajorVersion));
         _cached = result;
         return result;
     }
 
+    /// <summary>
+    /// 解析符号链接后所在 bin 目录的真实路径，用于识别重复的 Java 安装。
+    /// 解析失败时退回原始目录。
+    /// </summary>
+    private static string _RealBinDir(string exePath)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(exePath);
+            if (dir is null) return exePath;
+
+            var info = new DirectoryInfo(dir);
+
+            // Windows 的 junction / symlink 需要逐级解析才能拿到最终目标
+            var target = info.ResolveLinkTarget(returnFinalTarget: true);
+            while (target is not null)
+            {
+                var parent = target.ResolveLinkTarget(returnFinalTarget: true);
+                if (parent is null) break;
+                target = parent;
+            }
+
+            return (target?.FullName ?? info.FullName).ToLowerInvariant();
+        }
+        catch
+        {
+            return exePath.ToLowerInvariant();
+        }
+    }
+
+    /// <summary>
+    /// 同一 JDK 的多个入口之间的优先级：越靠前越优先展示。
+    /// 优先 javaw.exe，其次避开 latest 软链接目录。
+    /// </summary>
+    private static int ScoreEntry(JavaRuntime r)
+    {
+        var score = 0;
+
+        if (!r.Path.EndsWith("javaw.exe", StringComparison.OrdinalIgnoreCase)) score += 10;
+        if (r.Path.Contains(@"\latest\", StringComparison.OrdinalIgnoreCase)) score += 5;
+
+        return score;
+    }
     private static IEnumerable<string> _EnumerateCandidates()
     {
         // 1. 用户指定
         var manual = LauncherConfig.Current.JavaPath;
         if (!string.IsNullOrWhiteSpace(manual) && File.Exists(manual)) yield return manual;
 
-        // 2. PATH 中的 java
+        // 2. PATH 中的 java（javaw 与 java 都接受）
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         foreach (var dir in pathEnv.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
         {
-            var javaExe = Path.Combine(dir.Trim(), "javaw.exe");
-            if (File.Exists(javaExe)) yield return javaExe;
+            foreach (var exe in _JavaExesIn(dir.Trim()))
+                yield return exe;
         }
 
-        // 3. 常见安装目录
+        // 3. 注册表：绝大多数 JDK 安装器只写注册表，
+        //    仅靠固定目录会漏掉 Oracle / Zulu / Corretto / 部分 Temurin 安装。
+        foreach (var exe in _FromRegistry())
+            yield return exe;
+
+        // 4. 常见安装目录（递归查找）
+        var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        var localApp = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
         var roots = new[]
         {
-            @"C:\Program Files\Java",
-            @"C:\Program Files\Eclipse Adoptium",
-            @"C:\Program Files\Eclipse Foundation",
-            @"C:\Program Files\Microsoft",
-            @"C:\Program Files\Zulu",
-            @"C:\Program Files\BellSoft",
-            @"C:\Program Files\Amazon Corretto",
-            @"C:\Program Files (x86)\Java",
+            Path.Combine(pf, "Java"),
+            Path.Combine(pf, "Eclipse Adoptium"),
+            Path.Combine(pf, "Eclipse Foundation"),
+            Path.Combine(pf, "Microsoft"),
+            Path.Combine(pf, "Zulu"),
+            Path.Combine(pf, "BellSoft"),
+            Path.Combine(pf, "Amazon Corretto"),
+            Path.Combine(pf, "Semeru"),
+            Path.Combine(pf, "RedHat"),
+            Path.Combine(pf, "JetBrains"),
+            Path.Combine(pf86, "Java"),
+            Path.Combine(pf86, "Zulu"),
+            // 用户级安装（Scoop、包管理器、IDE 自带）
+            Path.Combine(localApp, "Programs"),
+            Path.Combine(localApp, "Eclipse Adoptium"),
+            Path.Combine(localApp, "Microsoft"),
+            Path.Combine(localApp, "Programs", "Eclipse Adoptium"),
+            // 启动器自带的运行时
             Path.Combine(Paths.DataRoot, "java"),
-            Path.Combine(Paths.RuntimeDir, "java")
+            Path.Combine(Paths.RuntimeDir, "java"),
+            Paths.RuntimeDir
         };
 
         foreach (var root in roots)
         {
             if (!Directory.Exists(root)) continue;
-            foreach (var exe in Directory.EnumerateFiles(root, "javaw.exe", SearchOption.AllDirectories))
-                yield return exe;
-        }
 
-        // 4. 启动器目录下的 runtime（由自动下载 Java 功能放置）
-        if (Directory.Exists(Paths.RuntimeDir))
-        {
-            foreach (var exe in Directory.EnumerateFiles(Paths.RuntimeDir, "javaw.exe", SearchOption.AllDirectories))
+            // 限制深度，避免在巨大的目录树下长时间扫描
+            foreach (var exe in _EnumerateJavaExes(root, maxDepth: 4))
                 yield return exe;
         }
     }
 
+    /// <summary>列出某目录下的 javaw.exe / java.exe（不含递归）。</summary>
+    private static IEnumerable<string> _JavaExesIn(string dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) yield break;
+
+        string[] names = ["javaw.exe", "java.exe"];
+        foreach (var name in names)
+        {
+            var full = Path.Combine(dir, name);
+            bool exists;
+            try { exists = File.Exists(full); } catch { exists = false; }
+            if (exists) yield return full;
+        }
+    }
+
+    /// <summary>
+    /// 递归查找含 java 可执行文件的目录，限制深度以防扫描过久。
+    /// 同一个 bin 目录下 javaw 与 java 只取一个，避免重复解析。
+    /// </summary>
+    private static IEnumerable<string> _EnumerateJavaExes(string root, int maxDepth)
+    {
+        var dirs = new List<string> { root };
+        var current = new List<string> { root };
+        var depth = 0;
+
+        while (depth < maxDepth && current.Count > 0)
+        {
+            var next = new List<string>();
+
+            foreach (var dir in current)
+            {
+                foreach (var exe in _JavaExesIn(dir))
+                    yield return exe;
+
+                IEnumerable<string> children;
+                try { children = Directory.EnumerateDirectories(dir); }
+                catch { continue; }
+
+                foreach (var child in children) next.Add(child);
+            }
+
+            current = next;
+            depth++;
+        }
+    }
+
+    /// <summary>
+    /// 从注册表读取 Java 安装路径。
+    /// Oracle / Zulu / Corretto / Semeru 等安装器会把路径写入 JavaSoft 键，
+    /// 这是固定目录扫描最容易漏掉的一批。
+    /// </summary>
+    private static IEnumerable<string> _FromRegistry()
+    {
+        var results = new List<string>();
+
+        if (!OperatingSystem.IsWindows()) return results;
+
+        string[] roots =
+        [
+            @"SOFTWARE\JavaSoft\Java Development Kit",
+            @"SOFTWARE\JavaSoft\Java Runtime Environment",
+            @"SOFTWARE\JavaSoft\JRE",
+            @"SOFTWARE\JavaSoft\JDK",
+            @"SOFTWARE\WOW6432Node\JavaSoft\Java Development Kit",
+            @"SOFTWARE\WOW6432Node\JavaSoft\Java Runtime Environment"
+        ];
+
+        foreach (var hiveName in new[] { "HKLM", "HKCU" })
+        {
+            foreach (var root in roots)
+            {
+                try
+                {
+                    using var hive = hiveName == "HKLM"
+                        ? Microsoft.Win32.Registry.LocalMachine
+                        : Microsoft.Win32.Registry.CurrentUser;
+
+                    using var key = hive.OpenSubKey(root);
+                    if (key is null) continue;
+
+                    // 子键是版本号，每个版本下通常有 JavaHome / Home
+                    foreach (var versionName in key.GetSubKeyNames())
+                    {
+                        using var versionKey = key.OpenSubKey(versionName);
+                        if (versionKey is null) continue;
+
+                        var home = versionKey.GetValue("JavaHome") as string
+                                   ?? versionKey.GetValue("Home") as string;
+
+                        if (string.IsNullOrWhiteSpace(home)) continue;
+
+                        var binDir = Path.Combine(home.Trim().TrimEnd('\\'), "bin");
+                        foreach (var exe in _JavaExesIn(binDir))
+                            results.Add(exe);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Debug($"读取 Java 注册表失败 {hiveName}\\{root}: {ex.Message}");
+                }
+            }
+        }
+
+        return results;
+    }
+
     /// <summary>执行 java -version 解析版本信息。</summary>
     public static JavaRuntime? Parse(string javaExe)
+    {
+        // javaw.exe 是 GUI 版本，某些发行版下它不把输出写到管道，
+        // 因此失败时回退到同目录的 java.exe 再试一次。
+        var runtime = _ParseWith(javaExe);
+        if (runtime is not null) return runtime;
+
+        var fileName = Path.GetFileName(javaExe);
+        if (fileName.Equals("javaw.exe", StringComparison.OrdinalIgnoreCase))
+        {
+            var console = Path.Combine(Path.GetDirectoryName(javaExe) ?? "", "java.exe");
+            if (File.Exists(console))
+            {
+                var fallback = _ParseWith(console);
+                if (fallback is not null) return fallback with { Path = javaExe };
+            }
+        }
+
+        return null;
+    }
+
+    private static JavaRuntime? _ParseWith(string javaExe)
     {
         try
         {
@@ -149,6 +345,13 @@ public static class JavaScanner
             else if (output.Contains("Oracle", StringComparison.OrdinalIgnoreCase)) vendor = "Oracle";
             else if (output.Contains("BellSoft", StringComparison.OrdinalIgnoreCase) ||
                      output.Contains("Liberica", StringComparison.OrdinalIgnoreCase)) vendor = "Liberica";
+            else if (output.Contains("Temurin", StringComparison.OrdinalIgnoreCase) ||
+                     output.Contains("AdoptOpenJDK", StringComparison.OrdinalIgnoreCase)) vendor = "Temurin";
+            // Oracle 新版不再打印品牌名，只输出 "Java(TM) SE Runtime Environment"，
+            // 因此用该特征识别，避免全部归类为 Unknown
+            else if (output.Contains("Java(TM)", StringComparison.OrdinalIgnoreCase)) vendor = "Oracle";
+            else if (output.Contains("OpenJDK", StringComparison.OrdinalIgnoreCase)) vendor = "OpenJDK";
+            else if (output.Contains("Semeru", StringComparison.OrdinalIgnoreCase)) vendor = "Semeru";
 
             var arch = output.Contains("64-Bit", StringComparison.OrdinalIgnoreCase) ? "x64" : "x86";
             var match = VersionRegex.Match(output);
@@ -202,3 +405,5 @@ public static class JavaScanner
         return all[0];
     }
 }
+
+
