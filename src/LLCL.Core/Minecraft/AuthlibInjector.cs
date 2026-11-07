@@ -59,6 +59,33 @@ public static class AuthlibInjector
         }
     }
 
+    /// <summary>
+    /// 异步准备 authlib-injector。必须用这个版本，
+    /// 同步版本在 UI 线程调用会造成界面卡死（点启动无响应）。
+    /// </summary>
+    public static async Task<string?> EnsureAsync(string? authServerUrl, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(authServerUrl)) return null;
+
+        if (File.Exists(CachedJar) && new FileInfo(CachedJar).Length > 100_000)
+            return CachedJar;
+
+        try
+        {
+            Directory.CreateDirectory(CacheDir);
+
+            var downloaded = await _DownloadAsync(ct).ConfigureAwait(false);
+            if (downloaded is not null)
+                Logger.Info($"authlib-injector 已就绪：{downloaded}");
+
+            return downloaded;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "下载 authlib-injector 失败");
+            return null;
+        }
+    }
     /// <summary>清理缓存，下次启动会重新下载。</summary>
     public static void ClearCache()
     {
@@ -133,4 +160,5 @@ public static class AuthlibInjector
         return bytes[0] == 0x50 && bytes[1] == 0x4B && bytes[2] == 0x03 && bytes[3] == 0x04;
     }
 }
+
 

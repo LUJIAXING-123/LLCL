@@ -32,6 +32,7 @@ public static class GameLaunchService
         var gameDir = vsSettings.GetGameDir(versionId);
 
         // ---------- 1. 登录 ----------
+        Logger.Info("[启动] 1/7 验证账号");
         onStage?.Invoke(new LaunchStage("正在验证账号…", 0.08));
 
         AccountEntry account;
@@ -62,6 +63,7 @@ public static class GameLaunchService
         }
 
         // ---------- 2. 补全文件 ----------
+        Logger.Info("[启动] 2/7 检查游戏文件");
         onStage?.Invoke(new LaunchStage("正在检查游戏文件…", 0.18));
 
         var versionJson = Path.Combine(Paths.VersionsDir, versionId, versionId + ".json");
@@ -85,6 +87,7 @@ public static class GameLaunchService
         }
 
         // ---------- 3. 选择 Java ----------
+        Logger.Info("[启动] 3/7 查找 Java");
         onStage?.Invoke(new LaunchStage("正在查找 Java 运行时…", 0.32));
 
         var javaPath = await ResolveJavaAsync(versionId);
@@ -92,7 +95,17 @@ public static class GameLaunchService
             return new LaunchResult(false, true, "未找到 Java 运行时");
 
         // ---------- 4. 组装参数 ----------
+        Logger.Info("[启动] 4/7 准备启动命令");
         onStage?.Invoke(new LaunchStage("正在准备启动命令…", 0.40));
+
+        // 第三方账号需要 authlib-injector：必须在后台异步准备，
+        // 否则同步下载会冻结界面，表现为点启动后卡死。
+        string? injectorPath = null;
+        if (account.Kind == AccountKind.ThirdParty && !string.IsNullOrWhiteSpace(account.ServerUrl))
+        {
+            onStage?.Invoke(new LaunchStage("正在准备第三方登录组件…", 0.36));
+            injectorPath = await AuthlibInjector.EnsureAsync(account.ServerUrl);
+        }
 
         var vs = VersionSettings.Load(versionId);
         var maxMemory = vs.OverrideMemory == true
@@ -112,7 +125,8 @@ public static class GameLaunchService
             Width = vs.OverrideWindow == true ? vs.Width : config.WindowWidth,
             Height = vs.OverrideWindow == true ? vs.Height : config.WindowHeight,
             // 第三方账号需要注入 authlib-injector 才能正确验证并显示皮肤
-            AuthServerUrl = account.Kind == AccountKind.ThirdParty ? account.ServerUrl : null
+            AuthServerUrl = account.Kind == AccountKind.ThirdParty ? account.ServerUrl : null,
+            AuthlibInjectorPath = injectorPath
         };
 
         // ---------- 5. 启动 ----------
@@ -120,6 +134,7 @@ public static class GameLaunchService
 
         try
         {
+            Logger.Info("[启动] 5/7 启动进程");
             onStage?.Invoke(new LaunchStage("正在启动游戏…", 0.48));
             process = await GameLauncher.LaunchAsync(versionId, gameDir, options);
         }
@@ -132,6 +147,7 @@ public static class GameLaunchService
         ProcessTracker.Track(versionId, process);
 
         // ---------- 6. 等待游戏窗口 ----------
+        Logger.Info("[启动] 6/7 等待游戏窗口");
         onStage?.Invoke(new LaunchStage("正在等待游戏窗口…", 0.62));
 
         var handle = await WindowWatcher.WaitForGameWindowAsync(process,
@@ -276,3 +292,4 @@ public static class ProcessTracker
         };
     }
 }
+

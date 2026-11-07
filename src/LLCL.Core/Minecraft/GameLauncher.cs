@@ -59,6 +59,12 @@ public sealed class GameLauncher
         /// 让游戏使用该站的验证与皮肤。
         /// </summary>
         public string? AuthServerUrl { get; set; }
+
+        /// <summary>
+        /// 已准备好的 authlib-injector jar 路径。
+        /// 由调用方在后台通过 AuthlibInjector.EnsureAsync 提前获取。
+        /// </summary>
+        public string? AuthlibInjectorPath { get; set; }
     }
 
     /// <summary>启动指定版本，返回 Java 进程。</summary>
@@ -121,19 +127,16 @@ public sealed class GameLauncher
 
         // 第三方验证服务器：注入 authlib-injector，
         // 让游戏向该站验证并加载其皮肤。必须在主类之前作为 JVM 参数。
-        if (!string.IsNullOrWhiteSpace(options.AuthServerUrl))
+        // jar 路径由调用方在后台预先准备好（见 AuthlibInjector.EnsureAsync），
+        // 此处不再做任何下载，避免阻塞界面。
+        if (!string.IsNullOrWhiteSpace(options.AuthlibInjectorPath))
         {
-            var injector = AuthlibInjector.Ensure(options.AuthServerUrl, ct);
-
-            if (injector is not null)
-            {
-                args.Add($"-javaagent:{injector}={options.AuthServerUrl}");
-                Logger.Info($"已注入 authlib-injector：{options.AuthServerUrl}");
-            }
-            else
-            {
-                Logger.Warn("未能准备 authlib-injector，第三方皮肤可能不生效");
-            }
+            args.Add($"-javaagent:{options.AuthlibInjectorPath}={options.AuthServerUrl}");
+            Logger.Info($"已注入 authlib-injector：{options.AuthServerUrl}");
+        }
+        else if (!string.IsNullOrWhiteSpace(options.AuthServerUrl))
+        {
+            Logger.Warn("未提供 authlib-injector，第三方皮肤可能不生效");
         }
 
         args.Add(version.MainClass);
