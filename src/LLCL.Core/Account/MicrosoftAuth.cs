@@ -19,33 +19,45 @@ public static class MicrosoftAuth
     /// <summary>
     /// 微软账号登录客户端 ID。
     /// <para>
-    /// 00000000402b5328 是最老的 Xbox Live 客户端 ID，实测它能通过
-    /// XBL 与 XSTS，但 Minecraft 服务拒绝签发令牌（403）。
-    /// 改用 Xbox 应用所用的 00000000441cc96b，该 ID 拥有完整的
-    /// Minecraft 服务权限。
+    /// 取自 PrismLauncher 的公开配置（CMakeLists.txt 中的 Launcher_MSA_CLIENT_ID），
+    /// 是开源启动器注册的 Azure 应用，权限范围包含 Xbox 与 Minecraft 服务。
+    /// 此前使用的 0000000040xxxxxx / 0000000044xxxxxx 均为微软自家应用的 ID，
+    /// 第三方拿不到 Minecraft 服务权限，login_with_xbox 一律返回 403。
     /// </para>
     /// </summary>
-    private const string ClientId = "00000000441cc96b";
+    private const string ClientId = "c36a9fb6-4f2a-41ff-90bd-ae7cc92031eb";
 
+    /// <summary>
+    /// 设备码与令牌端点：必须走 Entra ID 的 consumers 租户。
+    /// 自注册的 GUID 应用在 login.live.com 上会被拒绝（invalid_client）。
+    /// </summary>
     private const string DeviceCodeUrl =
-        "https://login.live.com/oauth20_connect.srf";
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
 
     private const string TokenUrl =
-        "https://login.live.com/oauth20_token.srf";
+        "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 
     /// <summary>
     /// 授权范围。
     /// <para>
-    /// 与 PCL-CE 保持一致使用 XboxLive.signin offline_access：
-    /// XboxLive.signin 授予 Xbox 服务访问权，offline_access 允许获取刷新令牌。
-    /// MBI_SSL 是更早的写法，已不适用于当前 Minecraft 服务。
+    /// 必须与 PrismLauncher 完全一致：XboxLive.SignIn XboxLive.offline_access。
+    /// 注意大小写与 XboxLive. 前缀——写成 XboxLive.signin offline_access
+    /// 时虽然也能拿到令牌，但缺少 Minecraft 服务所需的声明，
+    /// XSTS 之后的 launcher/login 会一律返回 403。
     /// </para>
     /// </summary>
-    private const string Scope = "XboxLive.signin offline_access";
+    private const string Scope = "XboxLive.SignIn XboxLive.offline_access";
 
     private const string XblUrl = "https://user.auth.xboxlive.com/user/authenticate";
     private const string XstsUrl = "https://xsts.auth.xboxlive.com/xsts/authorize";
-    private const string McLoginUrl = "https://api.minecraftservices.com/authentication/login_with_xbox";
+
+    /// <summary>
+    /// Minecraft 访问令牌端点。
+    /// 使用 launcher/login 而非已废弃的 authentication/login_with_xbox，
+    /// 后者对合法账号也会返回 403。
+    /// </summary>
+    private const string McLoginUrl = "https://api.minecraftservices.com/launcher/login";
+
     private const string McProfileUrl = "https://api.minecraftservices.com/minecraft/profile";
 
     /// <summary>设备码授权会话。</summary>
@@ -259,26 +271,29 @@ public static class MicrosoftAuth
             ["TokenType"] = "JWT"
         };
 
-        var xbl = await _PostJsonAsync(XblUrl, xblPayload, ct).ConfigureAwait(false);
+        var xbl = await _PostJsonAsync(XblUrl, xblPayload, ct, xboxContract: true).ConfigureAwait(false);
         var xblToken = xbl?["Token"]?.GetValue<string>()
                        ?? throw new AuthException("Xbox Live 验证失败（可能账号未开通 Xbox 服务）");
 
         progress?.Invoke("正在验证 Xbox 安全令牌…");
 
         // 2. XSTS 令牌
-        // 关键：必须使用 RelyingParty（准确的 Minecraft 服务地址）而非 SandboxId，
-        // 否则拿到的令牌无法用于 Minecraft 登录。
+        // 关键：Properties 中必须同时包含 SandboxId 与 UserTokens，
+        // 顶层使用 RelyingParty 指向 Minecraft 服务。
+        // 缺少 SandboxId 时 XSTS 仍会返回令牌，但该令牌不被 Minecraft 服务认可，
+        // launcher/login 会一直返回 403。
         var xstsPayload = new JsonObject
         {
             ["Properties"] = new JsonObject
             {
+                ["SandboxId"] = "RETAIL",
                 ["UserTokens"] = new JsonArray(xblToken)
             },
             ["RelyingParty"] = "rp://api.minecraftservices.com/",
             ["TokenType"] = "JWT"
         };
 
-        var xsts = await _PostJsonAsync(XstsUrl, xstsPayload, ct).ConfigureAwait(false);
+        var xsts = await _PostJsonAsync(XstsUrl, xstsPayload, ct, xboxContract: true).ConfigureAwait(false);
         var xstsToken = xsts?["Token"]?.GetValue<string>();
 
         if (xstsToken is null)
@@ -310,9 +325,13 @@ public static class MicrosoftAuth
         progress?.Invoke("正在获取 Minecraft 令牌…");
 
         // 3. Minecraft 访问令牌
+        // 注意：必须使用 launcher/login 端点，字段名为 xtoken，
+        // 且带上 platform=PC_LAUNCHER。旧的 login_with_xbox 端点
+        // 已不接受这种请求，会一律返回 403 FORBIDDEN。
         var mcPayload = new JsonObject
         {
-            ["identityToken"] = $"XBL3.0 x={uhs};{xstsToken}"
+            ["xtoken"] = $"XBL3.0 x={uhs};{xstsToken}",
+            ["platform"] = "PC_LAUNCHER"
         };
 
         var (mc, mcStatus) = await _PostJsonWithStatusAsync(McLoginUrl, mcPayload, ct)
@@ -412,14 +431,29 @@ public static class MicrosoftAuth
             return (null, 0);
         }
     }
+    /// <summary>
+    /// Xbox Live 系列接口要求携带 x-xbl-contract-version 请求头。
+    /// 缺少它时 XBL/XSTS 仍会返回令牌，但令牌权限不完整，
+    /// Minecraft 服务会以 403 拒绝，这是此前一直失败的关键原因。
+    /// </summary>
     private static async Task<JsonNode?> _PostJsonAsync(string url, JsonObject payload,
-        CancellationToken ct)
+        CancellationToken ct, bool xboxContract = false)
     {
         try
         {
-            using var resp = await Net.Http.Client.PostAsync(url,
-                new StringContent(payload.ToJsonString(), System.Text.Encoding.UTF8, "application/json"),
-                ct).ConfigureAwait(false);
+            using var req = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(payload.ToJsonString(),
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+
+            if (xboxContract)
+            {
+                req.Headers.Add("x-xbl-contract-version", "1");
+                req.Headers.Accept.ParseAdd("application/json");
+            }
+
+            using var resp = await Net.Http.Client.SendAsync(req, ct).ConfigureAwait(false);
 
             var status = (int)resp.StatusCode;
             var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -486,6 +520,8 @@ public static class MicrosoftAuth
         try { return JsonNode.Parse(body); } catch { return null; }
     }
 }
+
+
 
 
 
