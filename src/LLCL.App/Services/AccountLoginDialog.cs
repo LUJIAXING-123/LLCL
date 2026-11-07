@@ -60,6 +60,7 @@ public static class AccountLoginDialog
 
         using var cts = new CancellationTokenSource();
 
+        // 登录结果（成功时为账号，失败时为 null）
         var loginTask = Task.Run(async () =>
         {
             var session = await MicrosoftAuth.RequestDeviceCodeAsync(cts.Token);
@@ -101,7 +102,10 @@ public static class AccountLoginDialog
         // 用户关闭对话框时取消登录
         dialog.CloseButtonClick += (_, _) => cts.Cancel();
 
-        _ = ShowAndCloseAsync(dialog, loginTask, cts);
+        // 显示对话框，登录出结果后自动关闭。
+        // 注意：WinUI 同一时刻只能打开一个 ContentDialog，
+        // 因此失败时不能另开弹窗，必须先在对话框内展示错误再让用户关闭。
+        var showTask = dialog.ShowAsync();
 
         try
         {
@@ -109,14 +113,27 @@ public static class AccountLoginDialog
         }
         catch (OperationCanceledException)
         {
+            try { dialog.Hide(); } catch { }
+            await showTask;
             return false;
         }
         catch (AuthException ex)
         {
-            result = null;
-            _ = ShowErrorAsync(root, ex.Message);
+            await ShowErrorInsideAsync(dialog, status, codeText, linkText, copyButton, ex.Message);
+            await showTask;
             return false;
         }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "微软登录失败");
+            await ShowErrorInsideAsync(dialog, status, codeText, linkText, copyButton,
+                "登录失败：" + ex.Message);
+            await showTask;
+            return false;
+        }
+
+        try { dialog.Hide(); } catch { }
+        await showTask;
 
         if (result is not null)
         {
@@ -215,20 +232,25 @@ public static class AccountLoginDialog
         }
     }
 
-    /// <summary>登录成功后自动关闭对话框。</summary>
-    private static async Task ShowAndCloseAsync(ContentDialog dialog, Task<AccountEntry> loginTask,
-        CancellationTokenSource cts)
+    /// <summary>
+    /// 在当前登录对话框内展示错误，而不是另开一个弹窗。
+    /// WinUI 同一时刻只允许一个 ContentDialog，另开会导致
+    /// 「Only a single ContentDialog can be open at any time」异常。
+    /// </summary>
+    private static Task ShowErrorInsideAsync(ContentDialog dialog, TextBlock status,
+        TextBlock codeText, TextBlock linkText, Button copyButton, string message)
     {
-        var showTask = dialog.ShowAsync();
+        status.Text = message;
+        status.Foreground = Application.Current.Resources["SystemFillColorCriticalBrush"]
+                             as Microsoft.UI.Xaml.Media.Brush;
 
-        try
-        {
-            await loginTask;
-        }
-        catch { /* 失败由主流程处理 */ }
+        codeText.Visibility = Visibility.Collapsed;
+        linkText.Visibility = Visibility.Collapsed;
+        copyButton.Visibility = Visibility.Collapsed;
 
-        try { dialog.Hide(); } catch { }
-        await showTask;
+        dialog.CloseButtonText = "关闭";
+
+        return Task.CompletedTask;
     }
 
     private static async Task ShowErrorAsync(XamlRoot root, string message)
@@ -243,5 +265,6 @@ public static class AccountLoginDialog
         await dialog.ShowAsync();
     }
 }
+
 
 
