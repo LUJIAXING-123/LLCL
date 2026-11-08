@@ -4,42 +4,51 @@
 #
 #  版本来源：build/version.json
 #  阶段：dev → beta → preview → rc → release
-#  大版本 0 只产出 dev / beta（不会产出 preview / rc / release）
+#
+#  0.x 阶段只产出 dev / beta；preview / rc / release 留到 1.x
 #
 #  ---------------------------------------------------------
-#  一、日常构建（内部测试，不发分发）
+#  一、日常构建（内部测试）
 #  ---------------------------------------------------------
 #    dotnet build src\LLCL.App\LLCL.App.csproj -p:Platform=x64
 #
+#    dev 阶段不产出安装包，直接运行 bin 目录下的 exe：
+#      src\LLCL.App\bin\x64\Release\net10.0-windows10.0.26100.0\win-x64\LLCL.exe
+#
 #  ---------------------------------------------------------
-#  二、打 MSIX 安装包
+#  二、打安装包（beta 及以上）
 #  ---------------------------------------------------------
-#    pwsh build/publish.ps1 -Stage dev
 #    pwsh build/publish.ps1 -Stage beta -StageNumber 2
 #
 #    产物在 dist\ 目录：
-#      LLCL_<版本>_x64.msix          安装包
-#      LLCL_<版本>_x64.zip           免安装绿色包（可选）
+#      LLCL_<版本>_x64.msi           安装包（推荐分发）
+#      LLCL_<版本>_x64_portable.zip  免安装绿色包
+#      release-info.json             发布信息
+#
+#    MSI 安装到 %LOCALAPPDATA%\LL Craft Launcher，无需管理员权限。
 #
 #  ---------------------------------------------------------
-#  三、发布到 GitHub（仅 preview / rc / release，且 major >= 1）
+#  三、发布到 GitHub
 #  ---------------------------------------------------------
-#    pwsh build/publish.ps1 -Stage preview -GitHub
-#    脚本会：
-#      1. 拒绝在大版本 0 时发布
-#      2. 生成 changelog
-#      3. 打 tag v<版本>
-#      4. 上传 MSIX 到 GitHub Release
+#    pwsh build/publish.ps1 -Stage beta -StageNumber 2 -GitHub
+#
+#    可发布的阶段：
+#      0.x   仅 beta
+#      1.x+  仅 preview / rc / release
+#
+#    脚本会打 tag v<完整版本> 并上传安装包到 GitHub Release。
+#    前置条件：已安装 gh CLI 并完成 gh auth login。
 #
 #  ---------------------------------------------------------
 #  四、版本号约定
 #  ---------------------------------------------------------
-#    0.1.0-dev.1     内部第 1 次构建
-#    0.1.0-beta.1    第一次内测
-#    0.1.1-dev.1     修复若干问题后的内部构建
-#    1.0.0-preview.1 进入 1.x 后的首个公测
-#    1.0.0-rc.1      候选版
-#    1.0.0           正式版
+#    0.1.0-dev.1      内部第 1 次构建
+#    0.1.0-beta.1     第一次内测
+#    0.1.1-beta.2     修复若干问题后的第二次内测
+#    0.2.0-beta.1     功能更新后的小版本递增
+#    1.0.0-preview.1  进入 1.x 后的首个公测
+#    1.0.0-rc.1       候选版
+#    1.0.0            正式版
 #
 #  提示：修改 build/version.json 后提交，打 tag 时用 v<完整版本>，
 #        例如 v0.1.0-beta.1。

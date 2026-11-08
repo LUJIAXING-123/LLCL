@@ -40,14 +40,25 @@ $patch = $versionData.patch
 if (-not $Stage) { $Stage = $versionData.stage }
 if ($StageNumber -le 0) { $StageNumber = $versionData.stageNumber }
 
-# 大版本 0 的阶段约束
+# 阶段约束
+# 0.x 阶段：可以发 beta（允许提前公开测试），但不产出 preview / rc / release
 if ($major -eq 0 -and $Stage -in @('preview', 'rc', 'release')) {
-    Write-Host "大版本 0 期间不产出 $Stage，请使用 dev 或 beta。" -ForegroundColor Yellow
+    Write-Host "0.x 期间不产出 $Stage，请使用 dev 或 beta。" -ForegroundColor Yellow
     exit 1
 }
 
-if ($GitHub -and ($major -eq 0 -or $Stage -notin @('preview', 'rc', 'release'))) {
+# GitHub 发布规则
+#   0.x：允许 dev（私有，不建 Release）与 beta（建 Release）
+#   1.x 及以后：只有 preview / rc / release 才发布
+$gitHubAllowed = if ($major -eq 0) {
+    $Stage -eq 'beta'
+} else {
+    $Stage -in @('preview', 'rc', 'release')
+}
+
+if ($GitHub -and -not $gitHubAllowed) {
     Write-Host "当前版本 $major.$minor.$patch-$Stage 不允许发布到 GitHub。" -ForegroundColor Yellow
+    Write-Host "0.x 阶段仅 beta 可发布；1.x 及以后仅 preview / rc / release 可发布。" -ForegroundColor Yellow
     exit 1
 }
 
@@ -173,7 +184,7 @@ $infoFile = Join-Path $distDir 'release-info.json'
     arch       = $Arch
     buildTime  = (Get-Date).ToUniversalTime().ToString('o')
     portable   = $zipName
-    gitHubable = ($major -ne 0 -and $Stage -in @('preview', 'rc', 'release'))
+    gitHubable = $gitHubAllowed
 } | ConvertTo-Json | Set-Content $infoFile -Encoding UTF8
 
 Write-Host ""
@@ -192,4 +203,5 @@ if ($GitHub) {
         Write-Host "  GitHub 发布失败，请检查 gh 登录状态" -ForegroundColor Red
     }
 }
+
 
