@@ -53,6 +53,17 @@ public sealed record LinkStatus
     /// <summary>加入方本地转发端口。</summary>
     public int? LocalPort { get; init; }
 
+    /// <summary>
+    /// 加入方应使用的连接地址，形如 <c>127.0.0.1:50827</c>。
+    /// <para>
+    /// 由于联机走 EasyTier 的端口转发模式（--no-tun），不建立虚拟网卡，
+    /// Minecraft 的「多人游戏」靠 UDP 多播扫描真实网卡，扫不到虚拟网络里的房间。
+    /// 因此加入后需要手动「直接连接」这个地址。
+    /// </para>
+    /// </summary>
+    public string? JoinerAddress =>
+        IsHost || LocalPort is null or <= 0 ? null : $"127.0.0.1:{LocalPort.Value}";
+
     /// <summary>房间内成员昵称。</summary>
     public IReadOnlyList<string> Players { get; init; } = [];
 
@@ -102,6 +113,9 @@ public sealed class LinkService : IAsyncDisposable
     private readonly EasyTierCore _core = new();
     private LanScanner? _scanner;
     private LanBroadcaster? _broadcaster;
+
+    /// <summary>加入方使用：把本地转发端口广播给本机 Minecraft 的多人游戏列表。</summary>
+    private LocalBroadcaster? _localBroadcaster;
     private TcpForwarder? _forwarder;
     private Timer? _peerTimer;
     private volatile bool _disposed;
@@ -277,8 +291,15 @@ public sealed class LinkService : IAsyncDisposable
                 .ConfigureAwait(false);
             JoinerLocalPort = forwardPort;
 
+            // 本地转发：游戏连本地端口时由这里转到虚拟网络内的房主
             _forwarder = new TcpForwarder(forwardPort, RoomCode.HostIp, parsed.Port);
             _forwarder.Start();
+
+            // 关键步骤：把本地转发端口以「局域网世界」的名义广播给本机的 Minecraft。
+            // 走 EasyTier 的端口转发模式时没有虚拟网卡，游戏的多人游戏列表
+            // 只扫描真实网卡，因此搜不到对端世界；广播后即可直接出现在列表中。
+            _localBroadcaster = new LocalBroadcaster();
+            _localBroadcaster.Start($"LLCL 房间 · {parsed.Port}", forwardPort);
 
             RoomHistory.Add(parsed.FullCode, parsed.Port, false, DisplayName);
             _StartPeerTimer();
@@ -409,6 +430,8 @@ public sealed class LinkService : IAsyncDisposable
         _peerTimer = null;
         _broadcaster?.Stop();
         _broadcaster = null;
+        _localBroadcaster?.Stop();
+        _localBroadcaster = null;
         _forwarder?.Stop();
         _forwarder = null;
         _core.Stop();

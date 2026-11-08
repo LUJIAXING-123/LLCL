@@ -71,6 +71,26 @@
                                     Click="CopyCode_Click" />
                         </Grid>
 
+                        <!-- 连接地址：端口转发模式下，加入者需通过该地址直连 -->
+                        <Grid x:Name="ConnectAddressRow" Visibility="Collapsed" ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="连接地址" FontSize="12"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <TextBlock x:Name="ConnectAddressText" FontFamily="Consolas" FontSize="16"
+                                           FontWeight="SemiBold" IsTextSelectionEnabled="True"
+                                           TextWrapping="Wrap" />
+                                <TextBlock Text="在游戏中用「直接连接」填这个地址。局域网列表只扫描真实网卡，搜不到虚拟网络里的房间。"
+                                           FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"
+                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="复制地址" VerticalAlignment="Top"
+                                    Click="CopyAddress_Click" />
+                        </Grid>
+
                         <!-- 四项指标 -->
                         <Grid x:Name="MetricsGrid" ColumnSpacing="8" RowSpacing="8" Visibility="Collapsed">
                             <Grid.ColumnDefinitions>

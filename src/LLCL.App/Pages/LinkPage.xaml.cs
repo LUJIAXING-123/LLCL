@@ -138,6 +138,13 @@ public sealed partial class LinkPage : Page
         LeaveButton.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
         RefreshButton.Visibility = connected ? Visibility.Visible : Visibility.Collapsed;
 
+        // 连接地址仅对加入者有意义：端口转发模式下本机会开一个本地端口
+        var address = status.JoinerAddress;
+        ConnectAddressRow.Visibility = connected && address is not null
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        ConnectAddressText.Text = address ?? "—";
+
         CreateCard.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
         JoinCard.Visibility = connected ? Visibility.Collapsed : Visibility.Visible;
 
@@ -151,8 +158,8 @@ public sealed partial class LinkPage : Page
 
         RoomHintText.Visibility = Visibility.Visible;
         RoomHintText.Text = status.IsHost
-            ? "你是房主。把房间码发给好友即可加入；离开房间会关闭虚拟网络。"
-            : $"已加入房间。在 Minecraft 多人游戏中连接 127.0.0.1:{status.LocalPort} 即可进入游戏。";
+            ? "你是房主。把房间码发给好友，好友加入后会用「直接连接」进你的世界。"
+            : $"已加入房间。在 Minecraft 里选「直接连接」并填入上方的连接地址。";
     }
 
     private static Microsoft.UI.Xaml.Media.Brush Brush(string key)
@@ -347,6 +354,26 @@ public sealed partial class LinkPage : Page
             Clipboard.SetContent(package);
 
             ShowStatus($"房间码已复制：{code}", InfoBarSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            ShowStatus("复制失败：" + FriendlyError.ToText(ex), InfoBarSeverity.Warning);
+        }
+    }
+
+    /// <summary>复制加入者应使用的连接地址。</summary>
+    private void CopyAddress_Click(object sender, RoutedEventArgs e)
+    {
+        var address = Link.Status.JoinerAddress;
+        if (string.IsNullOrEmpty(address)) return;
+
+        try
+        {
+            var package = new DataPackage();
+            package.SetText(address);
+            Clipboard.SetContent(package);
+
+            ShowStatus($"连接地址已复制：{address}", InfoBarSeverity.Success);
         }
         catch (Exception ex)
         {
