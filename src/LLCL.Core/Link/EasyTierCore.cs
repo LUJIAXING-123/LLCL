@@ -310,6 +310,15 @@ public sealed class EasyTierCore : IDisposable
             args.Add("0");
         }
 
+        // 监听端口改为随机分配。
+        // EasyTier 默认绑定 11010-11013，一旦本机有残留内核进程或其他程序占用，
+        // 新实例会因 bind 失败直接退出（os error 10048），表现为「内核启动失败」。
+        // 显式指定 -l 会完全替代默认监听列表，改用系统分配的随机端口。
+        args.Add("-l");
+        args.Add("tcp://0.0.0.0:0");
+        args.Add("-l");
+        args.Add("udp://0.0.0.0:0");
+
         Logger.Info("启动 EasyTier: " + string.Join(" ", args));
 
         var psi = new ProcessStartInfo
@@ -326,8 +335,24 @@ public sealed class EasyTierCore : IDisposable
         };
 
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-        _process.OutputDataReceived += (_, e) => { if (e.Data is not null) OnLog?.Invoke(e.Data); };
-        _process.ErrorDataReceived += (_, e) => { if (e.Data is not null) OnLog?.Invoke(e.Data); };
+
+        // 保留最近若干行输出，启动失败时附到异常消息里，
+        // 否则用户只能看到「退出码 1」，无法判断是端口占用还是参数错误。
+        var recent = new LinkedList<string>();
+        void Capture(string line)
+        {
+            lock (recent)
+            {
+                recent.AddLast(line);
+                while (recent.Count > 12) recent.RemoveFirst();
+            }
+
+            // 内核自身日志也写入启动器日志，便于事后排查
+            Logger.Debug($"[EasyTier] {line}");
+        }
+
+        _process.OutputDataReceived += (_, e) => { if (e.Data is not null) Capture(e.Data); };
+        _process.ErrorDataReceived += (_, e) => { if (e.Data is not null) Capture(e.Data); };
         _process.Start();
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
@@ -341,9 +366,19 @@ public sealed class EasyTierCore : IDisposable
         {
             var exitCode = _process.ExitCode;
             _process = null;
+
+            string detail;
+            lock (recent) detail = string.Join("\n", recent);
+
+            // 端口占用是最常见的失败原因，单独给出可读结论
+            var hint = detail.Contains("10048") || detail.Contains("只允许使用一次")
+                ? "端口被占用。可能是上次的房间内核尚未退出，请稍等片刻或重启启动器后重试。"
+                : "通常是内核参数不兼容或缺少依赖。";
+
+            Logger.Error($"EasyTier 启动失败，退出码 {exitCode}。内核输出：\n{detail}");
+
             throw new InvalidOperationException(
-                $"EasyTier 内核启动失败（退出码 {exitCode}）。\n" +
-                "通常是内核参数不兼容或缺少依赖，请查看日志后重试。");
+                $"EasyTier 内核启动失败（退出码 {exitCode}）。\n{hint}");
         }
 
         Logger.Info("EasyTier 内核已启动并保持运行");

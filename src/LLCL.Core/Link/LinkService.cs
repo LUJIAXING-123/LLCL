@@ -225,6 +225,16 @@ public sealed class LinkService : IAsyncDisposable
 
         try
         {
+            // 上一轮会话未完全退出时，内核会继续占用监听端口，
+            // 导致新内核绑定失败（os error 10048）。先彻底清理。
+            // 必须在改变状态之前判断，否则条件恒为真。
+            if (CurrentRoomCode is not null || _core.IsRunning)
+            {
+                Logger.Info("[联机] 创建新房间前清理上一轮会话");
+                CleanupInternal();
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+
             _SetState(LinkState.Creating, "正在创建房间");
 
             var version = await EasyTierCore.EnsureInstalledAsync(null, ct).ConfigureAwait(false);
@@ -269,6 +279,15 @@ public sealed class LinkService : IAsyncDisposable
 
         try
         {
+            // 同上：先清理上一轮会话，避免内核监听端口被占用。
+            // 必须在改变状态之前判断，否则条件恒为真。
+            if (CurrentRoomCode is not null || _core.IsRunning)
+            {
+                Logger.Info("[联机] 加入新房间前清理上一轮会话");
+                CleanupInternal();
+                await Task.Delay(300, ct).ConfigureAwait(false);
+            }
+
             _SetState(LinkState.Joining, "正在加入房间");
 
             var version = await EasyTierCore.EnsureInstalledAsync(null, ct).ConfigureAwait(false);
