@@ -370,49 +370,22 @@ public sealed class LinkService : IAsyncDisposable
     }
 
     /// <summary>
-    /// 通过本地转发端口探测房主的游戏是否可达。
+    /// 通过本地转发端口确认房主的游戏是否真的可进入。
     /// <para>
-    /// 连接建立后立刻尝试读取一个字节：
-    /// 隧道不通时 EasyTier 会迅速关闭本地连接，读取抛出异常；
-    /// 隧道正常时，Minecraft 服务端在收到握手包前不会主动发数据，
-    /// 读取会一直等待到超时，这种情况视为可达。
+    /// 只测 TCP 能否连通是不够的：端口后面可能是别的服务，
+    /// 连接能建立但 Minecraft 握手过不去，游戏里仍表现为 Connection reset。
+    /// 因此这里按 Minecraft 协议做一次状态查询，只有收到合法的状态响应才算可达。
     /// </para>
     /// </summary>
     private static async Task<bool> _ProbeTunnelAsync(int port, TimeSpan timeout, CancellationToken ct)
     {
-        using var client = new TcpClient();
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(timeout);
+        var ok = await MinecraftPing.PingAsync(port, timeout, ct).ConfigureAwait(false);
+        if (ok)
+            Logger.Info($"连接自检：房主游戏端口 {port} 可达");
+        else
+            Logger.Warn($"连接自检：房主游戏端口 {port} 未响应 Minecraft 状态查询");
 
-        try
-        {
-            await client.ConnectAsync(IPAddress.Loopback, port, cts.Token).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"连接自检：无法连接本地转发端口 {port}: {ex.Message}");
-            return false;
-        }
-
-        var buffer = new byte[1];
-        try
-        {
-            var read = await client.GetStream().ReadAsync(buffer, cts.Token).ConfigureAwait(false);
-            // 读到 0 表示对端主动关闭，说明隧道没建立起来
-            if (read == 0) Logger.Warn("连接自检：房主端口未响应（连接被关闭）");
-            return read > 0;
-        }
-        catch (OperationCanceledException)
-        {
-            // 没有被断开，说明隧道已经建立，只是服务器在等握手包
-            Logger.Info("连接自检：房主游戏端口可达");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"连接自检：房主游戏端口不可达: {ex.Message}");
-            return false;
-        }
+        return ok;
     }
 
     private async Task<bool> _WaitForNetworkAsync(TimeSpan timeout, CancellationToken ct)

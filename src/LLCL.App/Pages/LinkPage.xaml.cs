@@ -242,6 +242,22 @@ public sealed partial class LinkPage : Page
             return;
         }
 
+        // 仅能连通不代表是游戏端口：8848 之类的端口上可能有别的服务，
+        // 连接能建立，但加入方握手时会被重置。
+        // 这里按 Minecraft 协议确认一次，避免把错误端口写进房间码。
+        Dispatch(() => BusyRing.IsActive = true);
+        var isMinecraft = await MinecraftPing.PingAsync(port, TimeSpan.FromSeconds(4), default);
+        Dispatch(() => BusyRing.IsActive = false);
+
+        if (!isMinecraft)
+        {
+            ShowStatus(
+                $"端口 {port} 可以连通，但没有响应 Minecraft 的状态查询，多半不是游戏端口。" +
+                "请在游戏里「对局域网开放」，并使用聊天栏显示的那个端口。",
+                InfoBarSeverity.Error);
+            return;
+        }
+
         var name = HostNameBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(name)) name = LauncherConfig.Current.OfflineUserName;
 
