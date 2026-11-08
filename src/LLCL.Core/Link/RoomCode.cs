@@ -80,33 +80,27 @@ public sealed record RoomCode(string FullCode, string NetworkName, string Networ
         }
 
         var cleaned = new StringBuilder(input.Length);
+
+        // 只在使用者输入了「确实不属于字符集的字符」时才报错。
+        // 注意字符集本身含 L，因此 L 不能被纠正成 1；
+        // 0 与 1 也都不在字符集内，输入后同样应报错而非静默替换。
         foreach (var raw in input.Trim().ToUpperInvariant())
         {
-            // 允许用户输入易混淆字符，自动纠正
-            var ch = raw switch
-            {
-                'O' => '0',
-                'I' => '1',
-                'L' => '1',
-                _ => raw
-            };
+            if (raw is '-' or ' ' or '_' or '\t') continue;
 
-            if (ch is '-' or ' ' or '_' or '\t') continue;
-
-            // 纠正后的 0/1 不在字符集内，提示用户
-            if (ch is '0' or '1')
+            if (Chars.IndexOf(raw) < 0)
             {
-                error = $"房间码中不能出现字符「{(raw is 'O' ? 'O' : raw is 'I' or 'L' ? 'I' : raw)}」，请检查是否输入了正确的内容。";
+                // 给出更贴近原因的提示：0/O、1/I 是常见的手误
+                error = raw switch
+                {
+                    '0' or 'O' => "房间码不含数字 0 与字母 O，请核对是否看错了字符。",
+                    '1' or 'I' => "房间码不含数字 1 与字母 I，请核对是否看错了字符。",
+                    _ => $"房间码包含无效字符「{raw}」。房间码只使用大写字母和数字 2-9。"
+                };
                 return null;
             }
 
-            if (Chars.IndexOf(ch) < 0)
-            {
-                error = $"房间码包含无效字符「{raw}」。房间码只使用大写字母和数字 2-9。";
-                return null;
-            }
-
-            cleaned.Append(ch);
+            cleaned.Append(raw);
         }
 
         if (cleaned.Length < MinInputLength)
