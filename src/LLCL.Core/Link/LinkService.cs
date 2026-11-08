@@ -116,7 +116,6 @@ public sealed class LinkService : IAsyncDisposable
 
     /// <summary>加入方使用：把本地转发端口广播给本机 Minecraft 的多人游戏列表。</summary>
     private LocalBroadcaster? _localBroadcaster;
-    private TcpForwarder? _forwarder;
     private Timer? _peerTimer;
     private volatile bool _disposed;
 
@@ -308,11 +307,21 @@ public sealed class LinkService : IAsyncDisposable
 
             var forwardPort = await _core.AddPortForwardAsync(RoomCode.HostIp, parsed.Port, ct)
                 .ConfigureAwait(false);
+
+            if (forwardPort <= 0)
+            {
+                CleanupInternal();
+                _SetState(LinkState.Error,
+                    "已连上房间，但建立端口转发失败，游戏仍无法进入。请退出房间后重试，或查看日志中的「端口转发」条目。");
+                return false;
+            }
+
             JoinerLocalPort = forwardPort;
 
-            // 本地转发：游戏连本地端口时由这里转到虚拟网络内的房主
-            _forwarder = new TcpForwarder(forwardPort, RoomCode.HostIp, parsed.Port);
-            _forwarder.Start();
+            // EasyTier 的 port-forward 已经在 127.0.0.1:forwardPort 上监听，
+            // 并把连接转发到虚拟网络内的房主。
+            // 这里不能再叠一层 TcpForwarder 绑同一端口（会 bind 失败，
+            // 表现为游戏端 Connection reset），直接广播该端口即可。
 
             // 关键步骤：把本地转发端口以「局域网世界」的名义广播给本机的 Minecraft。
             // 走 EasyTier 的端口转发模式时没有虚拟网卡，游戏的多人游戏列表
@@ -451,8 +460,6 @@ public sealed class LinkService : IAsyncDisposable
         _broadcaster = null;
         _localBroadcaster?.Stop();
         _localBroadcaster = null;
-        _forwarder?.Stop();
-        _forwarder = null;
         _core.Stop();
         _lastPeers = [];
         JoinerLocalPort = null;

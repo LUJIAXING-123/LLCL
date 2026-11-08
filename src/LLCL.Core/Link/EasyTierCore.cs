@@ -668,7 +668,14 @@ public sealed class EasyTierCore : IDisposable
     {
         var localPort = _NewPort();
         var cliExe = Path.Combine(InstallDir, "easytier-cli.exe");
-        if (!File.Exists(cliExe)) return localPort;
+        if (!File.Exists(cliExe))
+        {
+            Logger.Warn("找不到 easytier-cli.exe，无法建立端口转发");
+            return 0;
+        }
+
+        // 游戏只用 TCP，UDP 转发失败不应影响联机，因此仅警告。
+        var tcpOk = false;
 
         foreach (var protocol in new[] { "tcp", "udp" })
         {
@@ -682,18 +689,40 @@ public sealed class EasyTierCore : IDisposable
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,
-                    RedirectStandardError = true
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
                 };
+
                 using var cli = Process.Start(psi);
-                if (cli is not null) await cli.WaitForExitAsync(ct).ConfigureAwait(false);
+                if (cli is null) continue;
+
+                var stdout = await cli.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+                var stderr = await cli.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+                await cli.WaitForExitAsync(ct).ConfigureAwait(false);
+
+                var ok = cli.ExitCode == 0;
+                if (ok)
+                {
+                    if (protocol == "tcp") tcpOk = true;
+                    Logger.Info($"端口转发已建立 ({protocol}) 127.0.0.1:{localPort} -> {targetIp}:{targetPort}");
+                }
+                else
+                {
+                    var detail = string.Join(" ", new[] { stdout, stderr })
+                        .Trim().Replace("\r", " ").Replace("\n", " ");
+                    Logger.Warn($"端口转发失败 ({protocol})，退出码 {cli.ExitCode}: {detail}");
+                }
             }
             catch (Exception ex)
             {
-                Logger.Warn($"端口转发失败 ({protocol}): {ex.Message}");
+                Logger.Warn($"端口转发异常 ({protocol}): {ex.Message}");
             }
         }
 
-        return localPort;
+        // TCP 转发不可用时，广播出去的端口是死的，游戏连接会被重置。
+        // 返回 0 让上层直接报错，而不是让用户对着一个连不上的世界反复尝试。
+        return tcpOk ? localPort : 0;
     }
 
     public void Stop()
