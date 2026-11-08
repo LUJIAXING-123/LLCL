@@ -64,6 +64,12 @@ public sealed record LinkStatus
     public string? JoinerAddress =>
         IsHost || LocalPort is null or <= 0 ? null : $"127.0.0.1:{LocalPort.Value}";
 
+    /// <summary>
+    /// 加入后对房主游戏端口的连通性自检结果。
+    /// <c>null</c> 表示未检测，<c>false</c> 表示房主的游戏端口当前连不上。
+    /// </summary>
+    public bool? TunnelReachable { get; init; }
+
     /// <summary>房间内成员昵称。</summary>
     public IReadOnlyList<string> Players { get; init; } = [];
 
@@ -329,9 +335,29 @@ public sealed class LinkService : IAsyncDisposable
             _localBroadcaster = new LocalBroadcaster();
             _localBroadcaster.Start($"LLCL 房间 · {parsed.Port}", forwardPort);
 
+            // 探测房主的游戏端口是否真的能连上。
+            // 虚拟网络通、但房主已关闭世界或换了端口时，
+            // 游戏里只会显示一句「Connection reset」，用户无从判断原因。
+            var reachable = await _ProbeTunnelAsync(forwardPort, TimeSpan.FromSeconds(6), ct)
+                .ConfigureAwait(false);
+
             RoomHistory.Add(parsed.FullCode, parsed.Port, false, DisplayName);
             _StartPeerTimer();
-            _SetState(LinkState.Connected, $"已加入房间：{parsed.FullCode}，本地端口 {forwardPort}");
+
+            Status = Status with { TunnelReachable = reachable };
+
+            if (reachable)
+            {
+                _SetState(LinkState.Connected,
+                    $"已加入房间：{parsed.FullCode}，本地端口 {forwardPort}");
+            }
+            else
+            {
+                _SetState(LinkState.Connected,
+                    $"已加入房间，但房主的游戏端口 {parsed.Port} 暂时连不上。" +
+                    "请让房主确认已「对局域网开放」且没有关闭世界，然后重新加入房间。");
+            }
+
             return true;
         }
         catch (Exception ex)
@@ -339,6 +365,52 @@ public sealed class LinkService : IAsyncDisposable
             var friendly = FriendlyError.LogAndTranslate(ex, "加入房间失败");
             CleanupInternal();
             _SetState(LinkState.Error, friendly, ex);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 通过本地转发端口探测房主的游戏是否可达。
+    /// <para>
+    /// 连接建立后立刻尝试读取一个字节：
+    /// 隧道不通时 EasyTier 会迅速关闭本地连接，读取抛出异常；
+    /// 隧道正常时，Minecraft 服务端在收到握手包前不会主动发数据，
+    /// 读取会一直等待到超时，这种情况视为可达。
+    /// </para>
+    /// </summary>
+    private static async Task<bool> _ProbeTunnelAsync(int port, TimeSpan timeout, CancellationToken ct)
+    {
+        using var client = new TcpClient();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+
+        try
+        {
+            await client.ConnectAsync(IPAddress.Loopback, port, cts.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"连接自检：无法连接本地转发端口 {port}: {ex.Message}");
+            return false;
+        }
+
+        var buffer = new byte[1];
+        try
+        {
+            var read = await client.GetStream().ReadAsync(buffer, cts.Token).ConfigureAwait(false);
+            // 读到 0 表示对端主动关闭，说明隧道没建立起来
+            if (read == 0) Logger.Warn("连接自检：房主端口未响应（连接被关闭）");
+            return read > 0;
+        }
+        catch (OperationCanceledException)
+        {
+            // 没有被断开，说明隧道已经建立，只是服务器在等握手包
+            Logger.Info("连接自检：房主游戏端口可达");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"连接自检：房主游戏端口不可达: {ex.Message}");
             return false;
         }
     }

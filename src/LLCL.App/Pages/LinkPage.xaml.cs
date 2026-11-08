@@ -157,9 +157,21 @@ public sealed partial class LinkPage : Page
         OnlineText.Text = $"{status.OnlineCount} 人";
 
         RoomHintText.Visibility = Visibility.Visible;
-        RoomHintText.Text = status.IsHost
-            ? "你是房主。把房间码发给好友，好友加入后会用「直接连接」进你的世界。"
-            : $"已加入房间。在 Minecraft 里选「直接连接」并填入上方的连接地址。";
+        if (status.IsHost)
+        {
+            RoomHintText.Text = "你是房主。把房间码发给好友，好友加入后会用「直接连接」进你的世界。";
+        }
+        else if (status.TunnelReachable == false)
+        {
+            // 自检失败时给出明确原因，避免用户只看到游戏里的 Connection reset
+            RoomHintText.Text =
+                "已加入房间，但房主的游戏端口暂时连不上。" +
+                "请让房主确认游戏里已「对局域网开放」、且没有关闭世界，然后重新加入房间。";
+        }
+        else
+        {
+            RoomHintText.Text = "已加入房间。在 Minecraft 里选「直接连接」并填入上方的连接地址。";
+        }
     }
 
     private static Microsoft.UI.Xaml.Media.Brush Brush(string key)
@@ -237,7 +249,14 @@ public sealed partial class LinkPage : Page
         var ok = await Link.CreateRoomAsync(name, port);
         Dispatch(() => BusyRing.IsActive = false);
 
-        if (ok) UpdateStatusPanel(Link.Status);
+        if (ok)
+        {
+            // 房间码里记住了这个端口。房主重新对局域网开放会让端口变化，
+            // 届时旧房间码失效，需要重新创建房间。
+            PortHintText.Text =
+                $"房间码已包含端口 {port}。如果你重新对局域网开放，端口会变化，需要重新创建房间。";
+            UpdateStatusPanel(Link.Status);
+        }
     }
 
     private void WorldComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -278,7 +297,15 @@ public sealed partial class LinkPage : Page
     private async void Join_Click(object sender, RoutedEventArgs e)
     {
         var code = RoomCodeBox.Text?.Trim() ?? string.Empty;
-        var parsed = RoomCode.Parse(code, out var error);
+
+        // 端口覆盖优先，用于房间码里的端口已失效（房主重开世界）的情况
+        int? portOverride = null;
+        if (!double.IsNaN(OverridePortBox.Value) && OverridePortBox.Value > 0)
+        {
+            portOverride = (int)OverridePortBox.Value;
+        }
+
+        var parsed = RoomCode.Parse(code, out var error, portOverride);
         if (parsed is null)
         {
             JoinHintText.Text = error ?? "房间码无效";
@@ -289,12 +316,13 @@ public sealed partial class LinkPage : Page
         if (string.IsNullOrWhiteSpace(name)) name = LauncherConfig.Current.OfflineUserName;
 
         Dispatch(() => BusyRing.IsActive = true);
-        var ok = await Link.JoinRoomAsync(code, name);
+        var ok = await Link.JoinRoomAsync(code, name, portOverride);
         Dispatch(() => BusyRing.IsActive = false);
 
         if (ok)
         {
             RoomCodeBox.Text = string.Empty;
+            OverridePortBox.Value = double.NaN;
             JoinHintText.Text = string.Empty;
             UpdateStatusPanel(Link.Status);
         }

@@ -229,6 +229,19 @@
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                    TextWrapping="Wrap" />
 
+                        <!--
+                          房主的局域网端口由游戏随机分配，每次「对局域网开放」都会变，
+                          而房间码里存的是建房那一刻的端口。
+                          房主重开世界后房间码里的端口会失效，这里允许手动覆盖。
+                        -->
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <TextBlock Text="房主游戏端口（可选）" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                            <NumberBox x:Name="OverridePortBox" Width="130" Minimum="1" Maximum="65535"
+                                       SpinButtonPlacementMode="Hidden"
+                                       PlaceholderText="留空用房间码里的" />
+                        </StackPanel>
+
                         <StackPanel Spacing="6">
                             <Grid>
                                 <Grid.ColumnDefinitions>
