@@ -25,7 +25,8 @@
                 <NavigationViewItem Content="账号" Tag="account" />
                 <NavigationViewItem Content="启动" Tag="launch" />
                 <NavigationViewItem Content="下载" Tag="download" />
-                <NavigationViewItem Content="联机" Tag="link" />
+                <!-- 联机功能的入口暂时隐藏，与主界面保持一致 -->
+                <NavigationViewItem Content="联机" Tag="link" Visibility="Collapsed" />
                 <NavigationViewItem Content="启动器" Tag="launcher" />
             </NavigationView.MenuItems>
             <Frame x:Name="SettingsFrame" />

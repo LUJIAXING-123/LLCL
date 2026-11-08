@@ -54,7 +54,11 @@
                         <FontIcon Glyph="&#xE896;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="联机" Tag="link">
+                <!--
+                  联机功能暂时隐藏：EasyTier 端口转发链路在跨网络场景下仍不稳定，
+                  待定位清楚后再放出。页面代码与后端保留，便于随时恢复。
+                -->
+                <NavigationViewItem Content="联机" Tag="link" Visibility="Collapsed">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE909;" />
                     </NavigationViewItem.Icon>

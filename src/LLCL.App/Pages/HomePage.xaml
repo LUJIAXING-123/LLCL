@@ -65,7 +65,8 @@
                             </StackPanel>
                         </StackPanel>
                     </Border>
-                    <Border Grid.Column="1" Style="{StaticResource CardStyle}">
+                    <!-- 联机状态卡片随联机入口一并隐藏 -->
+                    <Border Grid.Column="1" Style="{StaticResource CardStyle}" Visibility="Collapsed">
                         <StackPanel Spacing="8">
                             <TextBlock Text="联机状态" FontSize="16" FontWeight="SemiBold" />
                             <TextBlock x:Name="LinkStateText" Style="{StaticResource SubHeaderTextStyle}" />
