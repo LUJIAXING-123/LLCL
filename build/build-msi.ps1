@@ -64,9 +64,35 @@ if (-not (Test-Path (Join-Path $publishDir 'LLCL.exe'))) {
 }
 
 # ---------- MSI 版本号 ----------
-$msiVersion = (($Version -split '-')[0] -split '\.' | Select-Object -First 3) -join '.'
-$segments = $msiVersion -split '\.'
-while ($segments.Count -lt 3) { $segments += '0'; $msiVersion = $segments -join '.' }
+# Windows Installer 只接受纯数字、最多 4 段的版本号，且必须严格递增
+# 才会触发 MajorUpgrade 覆盖安装。
+#
+# 原实现直接把 0.1.2-beta.5 截断成 0.1.2，导致所有 beta 的 MSI 版本号完全相同。
+# 用户重新安装时会被判定为「已安装同版本」而直接跳过，
+# 实际仍运行旧程序，表现为「重装后问题依旧」。
+#
+# 这里把预发布阶段与序号编码进第 4 段：
+#   dev.N -> 0+N     beta.N -> 100+N     preview.N -> 200+N
+#   rc.N  -> 300+N   正式版 -> 保留三段（不再加第 4 段）
+$baseVersion = ($Version -split '-')[0]
+$segments = @($baseVersion -split '\.' | Select-Object -First 3)
+while ($segments.Count -lt 3) { $segments += '0' }
+$baseVersion = $segments -join '.'
+
+$msiVersion = $baseVersion
+if ($Version -match '-(dev|beta|preview|rc)\.(\d+)$') {
+    $stageName = $matches[1]
+    $stageNumber = [int]$matches[2]
+    $stageBase = switch ($stageName) {
+        'dev'     { 0 }
+        'beta'    { 100 }
+        'preview' { 200 }
+        'rc'      { 300 }
+        default   { 0 }
+    }
+    $msiVersion = "$baseVersion.$($stageBase + $stageNumber)"
+}
+
 Write-Host "[2/4] MSI 版本号: $msiVersion" -ForegroundColor DarkGray
 
 # ---------- 扫描文件并生成 WiX 元素 ----------

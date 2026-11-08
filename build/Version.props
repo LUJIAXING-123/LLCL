@@ -43,6 +43,24 @@
             <!-- 供 AssemblyVersion 使用：去掉预发布后缀，第四段固定为 0 -->
             <_LlclAssemblyVersion>$(LlclMajor).$(LlclMinor).$(LlclPatch).0</_LlclAssemblyVersion>
 
+            <!--
+              FileVersion 必须随每个构建递增。
+
+              Windows Installer 决定是否覆盖文件时只看 FileVersion，
+              不看 ProductVersion。若各版本的 FileVersion 相同（例如固定为 x.y.z.0），
+              安装程序会认为「文件无需更新」而直接跳过，
+              用户即使换了新的 MSI 重装，实际运行的仍是旧程序。
+
+              因此把阶段与序号编码进第四段，保证单调递增：
+                dev.N -> 0+N     beta.N -> 100+N
+                preview.N -> 200+N     rc.N -> 300+N
+            -->
+            <_LlclStageBase>0</_LlclStageBase>
+            <_LlclStageBase Condition="'$(LlclStage)' == 'beta'">100</_LlclStageBase>
+            <_LlclStageBase Condition="'$(LlclStage)' == 'preview'">200</_LlclStageBase>
+            <_LlclStageBase Condition="'$(LlclStage)' == 'rc'">300</_LlclStageBase>
+            <_LlclFileVersion>$(LlclMajor).$(LlclMinor).$(LlclPatch).$([MSBuild]::Add($(_LlclStageBase), $(LlclStageNumber)))</_LlclFileVersion>
+
             <!-- MSIX 要求 Package Version 必须是四段数字，预发布用 stageNumber 编码到第四段 -->
             <_LlclMsixVersion>$(LlclMajor).$(LlclMinor).$(LlclPatch).$(LlclStageNumber)</_LlclMsixVersion>
 

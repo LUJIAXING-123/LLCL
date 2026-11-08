@@ -57,7 +57,7 @@
         <PropertyGroup>
             <Version>$(LlclVersion)</Version>
             <AssemblyVersion>$(_LlclAssemblyVersion)</AssemblyVersion>
-            <FileVersion>$(_LlclAssemblyVersion)</FileVersion>
+            <FileVersion>$(_LlclFileVersion)</FileVersion>
             <InformationalVersion>$(LlclVersion)</InformationalVersion>
         </PropertyGroup>
     </Target>
