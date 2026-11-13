@@ -66,14 +66,6 @@ public sealed partial class DownloadPage : Page
 
     private async Task LoadAsync()
     {
-        SourceText.Text = LauncherConfig.Current.Source switch
-        {
-            DownloadSource.BmclApi => "下载源：BMCLAPI 镜像",
-            DownloadSource.Custom => $"下载源：{LauncherConfig.Current.CustomSourceUrl}",
-            DownloadSource.Official => "下载源：官方",
-            _ => "下载源：自动（官方优先，失败回退镜像）"
-        };
-
         try
         {
             _manifest = await VersionManifestService.GetManifestAsync(true);
@@ -83,7 +75,7 @@ public sealed partial class DownloadPage : Page
         catch (Exception ex)
         {
             Logger.Error(ex, "获取版本清单失败");
-            SourceText.Text = "版本清单获取失败：" + ex.Message;
+            SelectedText.Text = "版本清单获取失败：" + ex.Message;
         }
     }
 
@@ -211,6 +203,9 @@ public sealed partial class DownloadPage : Page
 
     private void ApplySection()
     {
+        // 切换到别的分类时销毁二级页面，避免下次进入残留上一次的资源
+        if (PanelResourceDetail.Visibility == Visibility.Visible) CloseResourceDetail();
+
         PanelVanilla.Visibility = _section == "vanilla" ? Visibility.Visible : Visibility.Collapsed;
         PanelLoader.Visibility = _section == "loader" ? Visibility.Visible : Visibility.Collapsed;
         PanelTasks.Visibility = _section == "tasks" ? Visibility.Visible : Visibility.Collapsed;
@@ -227,6 +222,7 @@ public sealed partial class DownloadPage : Page
                 "resourcepack" => "资源包",
                 _ => "光影"
             };
+            PanelResource.Visibility = Visibility.Visible;
             _ = SearchResourcesAsync();
         }
 
@@ -602,6 +598,7 @@ public sealed partial class DownloadPage : Page
     /// <summary>用户在二级页面选中的具体版本。</summary>
     private ResourceFile? _detailFile;
 
+    /// <summary>加载器选项。第一项表示不限制。</summary>
     private static readonly string[] LoaderOptions = ["不限", "fabric", "forge", "neoforge", "quilt"];
 
     private void OpenResourceDetail(ResourceCard card)
@@ -614,6 +611,8 @@ public sealed partial class DownloadPage : Page
         DetailSummary.Text = card.Summary;
         DetailVersionList.ItemsSource = null;
         DetailDependencyList.ItemsSource = null;
+        DetailDependencySection.Visibility = Visibility.Collapsed;
+        DetailSelectionText.Text = string.Empty;
         DetailStatus.Text = "正在读取可用版本…";
 
         // 只有模组与整合包需要区分加载器
@@ -625,11 +624,6 @@ public sealed partial class DownloadPage : Page
             DetailLoaderCombo.SelectedIndex = 0;
         }
 
-        var versions = new List<string> { "全部版本" };
-        if (McVersionCombo.ItemsSource is IEnumerable<string> items) versions.AddRange(items);
-        DetailGameVersionCombo.ItemsSource = versions;
-        DetailGameVersionCombo.SelectedIndex = 0;
-
         PanelResource.Visibility = Visibility.Collapsed;
         PanelResourceDetail.Visibility = Visibility.Visible;
         InstallButton.Visibility = Visibility.Collapsed;
@@ -638,9 +632,30 @@ public sealed partial class DownloadPage : Page
         _ = LoadDetailFilesAsync();
     }
 
-    private void DetailBack_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// 关闭详情页并清空其状态。
+    /// 离开该界面时调用，避免下一次打开残留上次的资源与勾选。
+    /// </summary>
+    private void CloseResourceDetail()
     {
         PanelResourceDetail.Visibility = Visibility.Collapsed;
+
+        _detailCard = null;
+        _detailFiles = [];
+        _detailFile = null;
+
+        DetailVersionList.ItemsSource = null;
+        DetailDependencyList.ItemsSource = null;
+        DetailDependencySection.Visibility = Visibility.Collapsed;
+        DetailSelectionText.Text = string.Empty;
+        DetailStatus.Text = string.Empty;
+        DetailProgress.Visibility = Visibility.Collapsed;
+        DetailDownloadButton.IsEnabled = true;
+    }
+
+    private void DetailBack_Click(object sender, RoutedEventArgs e)
+    {
+        CloseResourceDetail();
         PanelResource.Visibility = Visibility.Visible;
         InstallButton.Visibility = _section == "tasks" ? Visibility.Collapsed : Visibility.Visible;
         DetailButton.Visibility = _section is "vanilla" ? Visibility.Visible : Visibility.Collapsed;
@@ -651,46 +666,58 @@ public sealed partial class DownloadPage : Page
         if (PanelResourceDetail.Visibility == Visibility.Visible) _ = LoadDetailFilesAsync();
     }
 
-    private void DetailGameVersion_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (PanelResourceDetail.Visibility == Visibility.Visible) _ = LoadDetailFilesAsync();
-    }
-
     private async Task LoadDetailFilesAsync()
     {
         if (_detailCard is null) return;
 
+        _detailFile = null;
+        DetailSelectionText.Text = string.Empty;
+        DetailDependencySection.Visibility = Visibility.Collapsed;
+        DetailDependencyList.ItemsSource = null;
         DetailProgress.Visibility = Visibility.Visible;
 
         try
         {
-            var gameVersion = DetailGameVersionCombo.SelectedItem as string;
-            if (gameVersion is "全部版本") gameVersion = null;
-
             var loader = DetailLoaderCombo.SelectedItem as string;
             if (loader is "不限") loader = null;
 
             var isCurseForge = _detailCard.Source == "CurseForge";
 
             _detailFiles = isCurseForge
-                ? await ResourceService.GetCurseForgeFilesAsync(_detailCard.Id, gameVersion, loader)
-                : await ResourceService.GetModrinthFilesAsync(_detailCard.Id, gameVersion, loader);
+                ? await ResourceService.GetCurseForgeFilesAsync(_detailCard.Id, null, loader)
+                : await ResourceService.GetModrinthFilesAsync(_detailCard.Id, null, loader);
 
-            DetailVersionList.ItemsSource = _detailFiles.Select(f => new ResourceFileItem
+            // 按游戏版本分组：同一版本下的所有资源版本收进同一个折叠项
+            var groups = new List<ResourceVersionGroup>();
+
+            foreach (var group in _detailFiles
+                         .GroupBy(f => FirstGameVersion(f.GameVersions))
+                         .OrderByDescending(g => g.Key, GameVersionComparer.Instance))
             {
-                Name = string.IsNullOrEmpty(f.VersionName) ? f.FileName : f.VersionName,
-                Meta = string.Join(" · ", new[]
+                var items = group.Select(f => new ResourceFileItem
                 {
-                    LLCL.Core.Net.DownloadTask.FormatSize(f.Size),
-                    f.Loaders ?? string.Empty,
-                    f.GameVersions ?? string.Empty
-                }.Where(s => !string.IsNullOrEmpty(s))),
-                File = f
-            }).ToList();
+                    Name = string.IsNullOrEmpty(f.VersionName) ? f.FileName : f.VersionName,
+                    Meta = string.Join(" · ", new[]
+                    {
+                        LLCL.Core.Net.DownloadTask.FormatSize(f.Size),
+                        f.Loaders ?? string.Empty
+                    }.Where(s => !string.IsNullOrEmpty(s))),
+                    File = f
+                }).ToList();
+
+                groups.Add(new ResourceVersionGroup
+                {
+                    GameVersion = group.Key,
+                    CountText = $"{items.Count} 个版本",
+                    Items = items
+                });
+            }
+
+            DetailVersionList.ItemsSource = groups;
 
             DetailStatus.Text = _detailFiles.Count == 0
-                ? "该条件下没有可用版本，换一个加载器或游戏版本试试"
-                : $"共 {_detailFiles.Count} 个可用版本";
+                ? "该加载器下没有可用版本"
+                : $"共 {groups.Count} 个游戏版本 · {_detailFiles.Count} 个文件";
         }
         catch (Exception ex)
         {
@@ -703,18 +730,61 @@ public sealed partial class DownloadPage : Page
         }
     }
 
-    private async void DetailVersion_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    /// <summary>取文件声明的第一个游戏版本，用于分组。</summary>
+    private static string FirstGameVersion(string? gameVersions)
     {
-        if (DetailVersionList.SelectedItem is not ResourceFileItem item) return;
+        if (string.IsNullOrWhiteSpace(gameVersions)) return "未标注版本";
+        return gameVersions.Split(',', StringSplitOptions.TrimEntries)[0];
+    }
+
+    /// <summary>按版本号语义比较，1.21.4 排在 1.21 之前。</summary>
+    private sealed class GameVersionComparer : IComparer<string>
+    {
+        public static readonly GameVersionComparer Instance = new();
+
+        public int Compare(string? x, string? y)
+        {
+            var a = Parse(x);
+            var b = Parse(y);
+            if (a is null || b is null) return string.CompareOrdinal(x, y);
+
+            for (var i = 0; i < Math.Max(a.Count, b.Count); i++)
+            {
+                var va = i < a.Count ? a[i] : 0;
+                var vb = i < b.Count ? b[i] : 0;
+                if (va != vb) return va.CompareTo(vb);
+            }
+
+            return 0;
+        }
+
+        private static List<int>? Parse(string? version)
+        {
+            if (string.IsNullOrWhiteSpace(version)) return null;
+
+            var numbers = new List<int>();
+            foreach (var part in version.Split('.', '-'))
+            {
+                if (!int.TryParse(part, out var value)) break;
+                numbers.Add(value);
+            }
+
+            return numbers.Count == 0 ? null : numbers;
+        }
+    }
+
+    /// <summary>点击某个具体版本即为选中，随后可直接下载。</summary>
+    private async void DetailFile_ItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not ResourceFileItem item) return;
 
         _detailFile = item.File;
-        DetailDependencyList.ItemsSource = null;
+        DetailSelectionText.Text = $"已选择：{item.Name}";
 
-        if (item.File.Dependencies.Count == 0)
-        {
-            DetailStatus.Text = "该版本没有声明前置模组";
-            return;
-        }
+        DetailDependencyList.ItemsSource = null;
+        DetailDependencySection.Visibility = Visibility.Collapsed;
+
+        if (item.File.Dependencies.Count == 0) return;
 
         var isCurseForge = _detailCard?.Source == "CurseForge";
         var deps = new List<DependencyItem>();
@@ -733,15 +803,23 @@ public sealed partial class DownloadPage : Page
             });
         }
 
+        if (deps.Count == 0) return;
+
         DetailDependencyList.ItemsSource = deps;
-        DetailStatus.Text = $"该版本声明了 {item.File.Dependencies.Count} 个前置";
+        DetailDependencySection.Visibility = Visibility.Visible;
     }
 
     private async void DetailDownload_Click(object sender, RoutedEventArgs e)
     {
-        if (_detailCard is null || _detailFile is null)
+        if (_detailCard is null)
         {
-            DetailStatus.Text = "请先选择一个具体版本";
+            DetailStatus.Text = "请先返回列表重新选择资源";
+            return;
+        }
+
+        if (_detailFile is null)
+        {
+            DetailStatus.Text = "请先展开游戏版本并点选一个具体版本";
             return;
         }
 
@@ -767,8 +845,8 @@ public sealed partial class DownloadPage : Page
                 .Where(d => d.IsChecked)
                 .ToList();
 
-            var gameVersion = DetailGameVersionCombo.SelectedItem as string;
-            if (gameVersion is "全部版本") gameVersion = null;
+            var gameVersion = FirstGameVersion(_detailFile.GameVersions);
+            if (gameVersion is "未标注版本") gameVersion = null;
             var loader = DetailLoaderCombo.SelectedItem as string;
             if (loader is "不限") loader = null;
             var isCurseForge = _detailCard.Source == "CurseForge";

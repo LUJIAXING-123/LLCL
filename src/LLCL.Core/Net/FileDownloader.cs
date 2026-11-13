@@ -572,7 +572,23 @@ public sealed class FileDownloader
             // 暂停时保持文件句柄，等恢复后继续
             await _WaitIfPausedAsync(ct).ConfigureAwait(false);
 
-            var read = await input.ReadAsync(buffer, ct).ConfigureAwait(false);
+            // 卡死保护：某些源会建立连接后一个字节都不发，
+            // 单纯 await ReadAsync 会无限挂起，整个下载队列随之僵死。
+            // 连续 3 秒收不到数据就放弃当前源，交给上层切换到下一个。
+            int read;
+            using (var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                stallCts.CancelAfter(TimeSpan.FromSeconds(3));
+                try
+                {
+                    read = await input.ReadAsync(buffer, stallCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    throw new IOException($"来源 {TimeSpan.FromSeconds(3).TotalSeconds:F0} 秒无数据，切换下一个源");
+                }
+            }
+
             if (read <= 0) break;
 
             await output.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);

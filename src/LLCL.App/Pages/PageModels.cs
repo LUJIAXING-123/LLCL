@@ -51,6 +51,14 @@ public sealed class ResourceFileItem
     public LLCL.Core.Resources.ResourceFile File { get; init; } = new();
 }
 
+/// <summary>按游戏版本分组的资源版本集合。</summary>
+public sealed class ResourceVersionGroup
+{
+    public string GameVersion { get; init; } = string.Empty;
+    public string CountText { get; init; } = string.Empty;
+    public IReadOnlyList<ResourceFileItem> Items { get; init; } = [];
+}
+
 /// <summary>关于页的赞助者条目。</summary>
 public sealed class SponsorItem
 {

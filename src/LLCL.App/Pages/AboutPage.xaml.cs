@@ -27,36 +27,43 @@ public sealed partial class AboutPage : Page
         PathLine.Text = $"游戏目录：{Paths.MinecraftDir}\n数据目录：{Paths.DataRoot}";
 
         SetLogo(LoadLogoBytes());
+        LoadDonateQr();
 
-        SponsorList.ItemsSource = new List<SponsorItem>
-        {
-            new() { Name = "冷刃风影", Amount = "¥15" }
-        };
+        ThanksLine.Text = "特别感谢 冷刃风影 的赞助支持。";
     }
 
-    /// <summary>展示赞助方式。文案保持克制，不诱导、不拦截功能。</summary>
-    private async void Donate_Click(object sender, RoutedEventArgs e)
+    /// <summary>加载项目根目录的微信收款码，缺失时不显示该区域。</summary>
+    private void LoadDonateQr()
     {
-        var dialog = new ContentDialog
-        {
-            Title = "支持开发",
-            Content = new TextBlock
-            {
-                TextWrapping = TextWrapping.Wrap,
-                Text =
-                    "LLCL 是免费开源项目，所有功能都不收费。\n\n" +
-                    "如果你想支持后续开发，可以通过以下任一方式：\n" +
-                    "· GitHub 仓库的 Sponsor 入口\n" +
-                    "· 在 GitHub Issues 留言索要其他渠道\n\n" +
-                    "赞助完全自愿，不影响任何功能的使用。",
-            },
-            CloseButtonText = "知道了",
-            XamlRoot = XamlRoot
-        };
+        const string fileName = "donate-qrcode.png";
 
-        await dialog.ShowAsync();
+        foreach (var dir in new[] { Paths.LauncherDir, AppContext.BaseDirectory, Paths.DataRoot })
+        {
+            try
+            {
+                var path = Path.Combine(dir, fileName);
+                if (!File.Exists(path)) continue;
+
+                var bytes = File.ReadAllBytes(path);
+                if (bytes.Length == 0) continue;
+
+                var bitmap = new BitmapImage();
+                using var stream = new MemoryStream(bytes).AsRandomAccessStream();
+                bitmap.SetSource(stream);
+                DonateQrImage.Source = bitmap;
+                return;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"读取收款码失败: {ex.Message}");
+            }
+        }
+
+        Logger.Warn($"未找到收款码 {fileName}，关于页不显示赞助图片");
+        DonateQrImage.Visibility = Visibility.Collapsed;
     }
 
+    /// <summary>打开项目仓库。</summary>
     private void Repo_Click(object sender, RoutedEventArgs e)
     {
         try

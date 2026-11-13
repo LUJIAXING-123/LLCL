@@ -22,12 +22,13 @@
   "major": 0,
   "minor": 1,
   "patch": 3,
-  "stage": "beta",
+  "stage": "dev",
   "stageNumber": 1,
   "productName": "LL Craft Launcher",
   "productShortName": "LLCL",
   "company": "LL STUDIO"
 }
+
 
 
 
