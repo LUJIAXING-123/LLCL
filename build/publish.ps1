@@ -110,12 +110,15 @@ if (Test-Path $logoSource) {
 }
 
 # ---------- 2. 构建 ----------
+# 注意：写入 bin 目录的产物一律使用 dev 版本号。
+# beta/preview/rc 只允许出现在 dist 里的安装包与绿色包中。
 Write-Host "[2/5] 编译..." -ForegroundColor Green
+$binStage = 'dev'
 $buildArgs = @(
     'build', (Join-Path $root 'src/LLCL.App/LLCL.App.csproj'),
     '-c', 'Release',
     "-p:Platform=$Arch",
-    "-p:LlclStage=$Stage",
+    "-p:LlclStage=$binStage",
     "-p:LlclStageNumber=$StageNumber",
     '--nologo'
 )
@@ -123,8 +126,11 @@ $buildArgs = @(
 if ($LASTEXITCODE -ne 0) { throw "编译失败" }
 
 # ---------- 3. 发布（自包含文件夹） ----------
+# 发布目录放在 artifacts 下，避免把带 beta 版本号的文件写进 bin。
 Write-Host "[3/5] 发布文件..." -ForegroundColor Green
 $rid = if ($Arch -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
+$publishDir = Join-Path $root "artifacts/publish-$rid"
+if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }
 $publishArgs = @(
     'publish', (Join-Path $root 'src/LLCL.App/LLCL.App.csproj'),
     '-c', 'Release',
@@ -132,13 +138,13 @@ $publishArgs = @(
     "-r", $rid,
     "-p:LlclStage=$Stage",
     "-p:LlclStageNumber=$StageNumber",
+    '-o', $publishDir,
     '--nologo',
     '-v', 'm'
 )
 & dotnet @publishArgs | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "发布失败" }
 
-$publishDir = Join-Path $root "src/LLCL.App/bin/$Arch/Release/net10.0-windows10.0.26100.0/$rid/publish"
 if (-not (Test-Path $publishDir)) { throw "找不到发布目录: $publishDir" }
 
 # ---------- 4. 打包绿色版 zip ----------
@@ -160,6 +166,7 @@ if (-not $SkipMsix) {
         '-File', (Join-Path $root 'build\build-msi.ps1'),
         '-Arch', $Arch,
         '-Version', $fullVersion,
+        '-PublishDir', $publishDir,
         '-SkipBuild'
     )
     & pwsh @msiArgs | Out-Host
@@ -174,6 +181,14 @@ if (-not $SkipMsix) {
 } else {
     Write-Host "[5/5] 跳过安装包（-SkipMsix）" -ForegroundColor DarkGray
 }
+
+# ---------- 恢复 bin 为 dev 版本 ----------
+# dotnet publish 会顺带把 bin 下的程序集重新编译成 beta 版本，
+# 而 bin 目录要求只放 dev。打包完成后重新编译一次把它还原。
+Write-Host "恢复 bin 目录为 dev 版本..." -ForegroundColor Green
+& dotnet build (Join-Path $root 'src/LLCL.App/LLCL.App.csproj') `
+    -c Release "-p:Platform=$Arch" "-p:LlclStage=dev" `
+    "-p:LlclStageNumber=$StageNumber" --nologo -v q | Out-Host
 
 
 # ---------- 生成发布信息 ----------

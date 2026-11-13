@@ -16,6 +16,10 @@ param(
 
     [string]$Version = '',
 
+    # 已发布好的目录；为空时使用 artifacts 下的默认位置。
+    # bin 目录只放 dev 版本，带 beta 等后缀的产物统一在 artifacts 里构建。
+    [string]$PublishDir = '',
+
     [switch]$SkipBuild
 )
 
@@ -48,18 +52,18 @@ if (-not (Get-Command wix -ErrorAction SilentlyContinue)) {
 
 # ---------- 发布 ----------
 $rid = if ($Arch -eq 'ARM64') { 'win-arm64' } else { 'win-x64' }
-$publishDir = Join-Path $root "src/LLCL.App/bin/$Arch/Release/net10.0-windows10.0.26100.0/$rid/publish"
+if (-not $PublishDir) { $PublishDir = Join-Path $root "artifacts/publish-$rid" }
 
 if (-not $SkipBuild) {
     Write-Host "[1/4] 发布应用..." -ForegroundColor Green
     dotnet publish (Join-Path $root 'src/LLCL.App/LLCL.App.csproj') `
-        -c Release "-p:Platform=$Arch" -r $rid --nologo -v m | Out-Host
+        -c Release "-p:Platform=$Arch" -r $rid -o $PublishDir --nologo -v m | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "发布失败" }
 } else {
     Write-Host "[1/4] 跳过发布（使用现有产物）" -ForegroundColor DarkGray
 }
 
-if (-not (Test-Path (Join-Path $publishDir 'LLCL.exe'))) {
+if (-not (Test-Path (Join-Path $PublishDir 'LLCL.exe'))) {
     throw "发布目录缺少 LLCL.exe，请先执行发布"
 }
 
@@ -98,7 +102,7 @@ Write-Host "[2/4] MSI 版本号: $msiVersion" -ForegroundColor DarkGray
 # ---------- 扫描文件并生成 WiX 元素 ----------
 Write-Host "[3/4] 扫描发布目录..." -ForegroundColor Green
 
-$files = Get-ChildItem $publishDir -File -Recurse |
+$files = Get-ChildItem $PublishDir -File -Recurse |
     Where-Object { $_.Extension -notin @('.pdb', '.ipdb', '.iobj') }
 
 Write-Host "  共 $($files.Count) 个文件" -ForegroundColor DarkGray
@@ -113,7 +117,7 @@ function Get-DirId([string]$relDir) {
 # 收集所有需要的目录（含中间层级）
 $dirSet = [System.Collections.Generic.HashSet[string]]::new()
 foreach ($f in $files) {
-    $rel = [System.IO.Path]::GetRelativePath($publishDir, $f.FullName)
+    $rel = [System.IO.Path]::GetRelativePath($PublishDir, $f.FullName)
     $dir = [System.IO.Path]::GetDirectoryName($rel)
     while (-not [string]::IsNullOrEmpty($dir)) {
         [void]$dirSet.Add($dir)
@@ -161,7 +165,7 @@ $fileBuilder = [System.Text.StringBuilder]::new()
 $index = 0
 
 foreach ($f in $files) {
-    $rel = [System.IO.Path]::GetRelativePath($publishDir, $f.FullName)
+    $rel = [System.IO.Path]::GetRelativePath($PublishDir, $f.FullName)
     $dir = [System.IO.Path]::GetDirectoryName($rel)
     $dirId = Get-DirId $dir
     $srcPath = $f.FullName.Replace('\', '\\')
@@ -212,6 +216,7 @@ Write-Host "路径: $msiPath" -ForegroundColor Cyan
 
 # 清理临时文件
 Remove-Item $wxsTemp -Force -ErrorAction SilentlyContinue
+
 
 
 

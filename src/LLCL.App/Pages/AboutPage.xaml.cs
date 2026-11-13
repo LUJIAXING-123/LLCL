@@ -27,6 +27,50 @@ public sealed partial class AboutPage : Page
         PathLine.Text = $"游戏目录：{Paths.MinecraftDir}\n数据目录：{Paths.DataRoot}";
 
         SetLogo(LoadLogoBytes());
+
+        SponsorList.ItemsSource = new List<SponsorItem>
+        {
+            new() { Name = "冷刃风影", Amount = "¥15" }
+        };
+    }
+
+    /// <summary>展示赞助方式。文案保持克制，不诱导、不拦截功能。</summary>
+    private async void Donate_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = "支持开发",
+            Content = new TextBlock
+            {
+                TextWrapping = TextWrapping.Wrap,
+                Text =
+                    "LLCL 是免费开源项目，所有功能都不收费。\n\n" +
+                    "如果你想支持后续开发，可以通过以下任一方式：\n" +
+                    "· GitHub 仓库的 Sponsor 入口\n" +
+                    "· 在 GitHub Issues 留言索要其他渠道\n\n" +
+                    "赞助完全自愿，不影响任何功能的使用。",
+            },
+            CloseButtonText = "知道了",
+            XamlRoot = XamlRoot
+        };
+
+        await dialog.ShowAsync();
+    }
+
+    private void Repo_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "https://github.com/LUJIAXING-123/LLCL",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"打开仓库失败: {ex.Message}");
+        }
     }
 
     /// <summary>按优先级尝试多种来源取得图标字节。</summary>

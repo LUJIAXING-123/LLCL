@@ -321,46 +321,25 @@ public static class DownloadQueue
     }
 
     /// <summary>
-    /// 取消任务并彻底清理：删除该版本目录下的全部文件（含已完成部分），
-    /// 让下一次安装从干净状态开始。
+    /// 取消单个任务并把它的记录从列表移除。
+    /// <para>
+    /// 只影响这一个任务：下载器在取消时已经清掉自己的 .part 临时文件，
+    /// 不会动到同版本里其它已经下好的资源（例如模组、资源包）。
+    /// </para>
     /// </summary>
-    public static void CancelAndPurge(string taskId)
+    public static void CancelAndRemove(string taskId)
     {
-        DownloadTask? target;
-        var affected = new List<DownloadTask>();
-
         lock (_lock)
         {
-            target = _tasks.FirstOrDefault(t => t.Id == taskId);
+            var target = _tasks.FirstOrDefault(t => t.Id == taskId);
             if (target is null) return;
 
             target.Downloader?.Cancel();
             try { target.Cts?.Cancel(); } catch { }
-            affected.Add(target);
-
-            // 同版本的其它任务一并取消（例如先下原版再装加载器）
-            var version = target.TargetVersion;
-            if (!string.IsNullOrEmpty(version))
-            {
-                foreach (var other in _tasks)
-                {
-                    if (other.Id == taskId) continue;
-                    if (!string.Equals(other.TargetVersion, version, StringComparison.OrdinalIgnoreCase))
-                        continue;
-                    if (other.State is DownloadState.Completed or DownloadState.Failed
-                        or DownloadState.Canceled) continue;
-
-                    other.Downloader?.Cancel();
-                    try { other.Cts?.Cancel(); } catch { }
-                    affected.Add(other);
-                }
-            }
+            _tasks.Remove(target);
         }
 
-        foreach (var task in affected) _Notify(task);
-
-        if (!string.IsNullOrEmpty(target.TargetVersion))
-            PurgeVersionDirectory(target.TargetVersion);
+        Changed?.Invoke();
     }
 
     /// <summary>彻底删除某个版本的目录与相关缓存文件。</summary>

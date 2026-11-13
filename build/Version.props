@@ -33,6 +33,8 @@
             <LlclIsPublicRelease Condition="'$(LlclIsPublicRelease)' == ''">false</LlclIsPublicRelease>
 
             <LlclIsGithubStage Condition="'$(LlclStage)' == 'preview' or '$(LlclStage)' == 'rc' or '$(LlclIsPublicRelease)' == 'true'">true</LlclIsGithubStage>
+            <!-- 0.x 阶段的 beta 允许发布到 GitHub，与 publish.ps1 的规则保持一致 -->
+            <LlclIsGithubStage Condition="'$(LlclStage)' == 'beta' and '$(LlclMajor)' == '0'">true</LlclIsGithubStage>
             <LlclIsGithubStage Condition="'$(LlclIsGithubStage)' == ''">false</LlclIsGithubStage>
 
             <!-- 版本字符串 -->

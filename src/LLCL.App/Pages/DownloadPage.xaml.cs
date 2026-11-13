@@ -588,8 +588,218 @@ public sealed partial class DownloadPage : Page
 
     private void ResourceList_ItemClick(object sender, ItemClickEventArgs e)
     {
-        if (e.ClickedItem is ResourceCard card) ResourceList.SelectedItem = card;
+        if (e.ClickedItem is ResourceCard card) OpenResourceDetail(card);
     }
+
+    #region 资源二级页面
+
+    /// <summary>二级页面当前打开的资源。</summary>
+    private ResourceCard? _detailCard;
+
+    /// <summary>二级页面拿到的全部可用文件。</summary>
+    private List<ResourceFile> _detailFiles = [];
+
+    /// <summary>用户在二级页面选中的具体版本。</summary>
+    private ResourceFile? _detailFile;
+
+    private static readonly string[] LoaderOptions = ["不限", "fabric", "forge", "neoforge", "quilt"];
+
+    private void OpenResourceDetail(ResourceCard card)
+    {
+        _detailCard = card;
+        _detailFiles = [];
+        _detailFile = null;
+
+        DetailTitle.Text = card.Name;
+        DetailSummary.Text = card.Summary;
+        DetailVersionList.ItemsSource = null;
+        DetailDependencyList.ItemsSource = null;
+        DetailStatus.Text = "正在读取可用版本…";
+
+        // 只有模组与整合包需要区分加载器
+        var needsLoader = _section is "mod" or "modpack";
+        DetailLoaderCombo.Visibility = needsLoader ? Visibility.Visible : Visibility.Collapsed;
+        if (needsLoader)
+        {
+            DetailLoaderCombo.ItemsSource = LoaderOptions;
+            DetailLoaderCombo.SelectedIndex = 0;
+        }
+
+        var versions = new List<string> { "全部版本" };
+        if (McVersionCombo.ItemsSource is IEnumerable<string> items) versions.AddRange(items);
+        DetailGameVersionCombo.ItemsSource = versions;
+        DetailGameVersionCombo.SelectedIndex = 0;
+
+        PanelResource.Visibility = Visibility.Collapsed;
+        PanelResourceDetail.Visibility = Visibility.Visible;
+        InstallButton.Visibility = Visibility.Collapsed;
+        DetailButton.Visibility = Visibility.Collapsed;
+
+        _ = LoadDetailFilesAsync();
+    }
+
+    private void DetailBack_Click(object sender, RoutedEventArgs e)
+    {
+        PanelResourceDetail.Visibility = Visibility.Collapsed;
+        PanelResource.Visibility = Visibility.Visible;
+        InstallButton.Visibility = _section == "tasks" ? Visibility.Collapsed : Visibility.Visible;
+        DetailButton.Visibility = _section is "vanilla" ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void DetailLoader_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (PanelResourceDetail.Visibility == Visibility.Visible) _ = LoadDetailFilesAsync();
+    }
+
+    private void DetailGameVersion_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (PanelResourceDetail.Visibility == Visibility.Visible) _ = LoadDetailFilesAsync();
+    }
+
+    private async Task LoadDetailFilesAsync()
+    {
+        if (_detailCard is null) return;
+
+        DetailProgress.Visibility = Visibility.Visible;
+
+        try
+        {
+            var gameVersion = DetailGameVersionCombo.SelectedItem as string;
+            if (gameVersion is "全部版本") gameVersion = null;
+
+            var loader = DetailLoaderCombo.SelectedItem as string;
+            if (loader is "不限") loader = null;
+
+            var isCurseForge = _detailCard.Source == "CurseForge";
+
+            _detailFiles = isCurseForge
+                ? await ResourceService.GetCurseForgeFilesAsync(_detailCard.Id, gameVersion, loader)
+                : await ResourceService.GetModrinthFilesAsync(_detailCard.Id, gameVersion, loader);
+
+            DetailVersionList.ItemsSource = _detailFiles.Select(f => new ResourceFileItem
+            {
+                Name = string.IsNullOrEmpty(f.VersionName) ? f.FileName : f.VersionName,
+                Meta = string.Join(" · ", new[]
+                {
+                    LLCL.Core.Net.DownloadTask.FormatSize(f.Size),
+                    f.Loaders ?? string.Empty,
+                    f.GameVersions ?? string.Empty
+                }.Where(s => !string.IsNullOrEmpty(s))),
+                File = f
+            }).ToList();
+
+            DetailStatus.Text = _detailFiles.Count == 0
+                ? "该条件下没有可用版本，换一个加载器或游戏版本试试"
+                : $"共 {_detailFiles.Count} 个可用版本";
+        }
+        catch (Exception ex)
+        {
+            DetailStatus.Text = "读取版本失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
+            Logger.Error(ex, "读取资源版本失败");
+        }
+        finally
+        {
+            DetailProgress.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private async void DetailVersion_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DetailVersionList.SelectedItem is not ResourceFileItem item) return;
+
+        _detailFile = item.File;
+        DetailDependencyList.ItemsSource = null;
+
+        if (item.File.Dependencies.Count == 0)
+        {
+            DetailStatus.Text = "该版本没有声明前置模组";
+            return;
+        }
+
+        var isCurseForge = _detailCard?.Source == "CurseForge";
+        var deps = new List<DependencyItem>();
+
+        foreach (var dep in item.File.Dependencies.Take(8))
+        {
+            var name = await ResourceService.GetProjectNameAsync(
+                isCurseForge ? ResourceSource.CurseForge : ResourceSource.Modrinth, dep.ProjectId);
+
+            deps.Add(new DependencyItem
+            {
+                ProjectId = dep.ProjectId,
+                Label = $"{(dep.IsRequired ? "必需" : "可选")} · {name ?? dep.ProjectId}",
+                IsRequired = dep.IsRequired,
+                IsChecked = dep.IsRequired
+            });
+        }
+
+        DetailDependencyList.ItemsSource = deps;
+        DetailStatus.Text = $"该版本声明了 {item.File.Dependencies.Count} 个前置";
+    }
+
+    private async void DetailDownload_Click(object sender, RoutedEventArgs e)
+    {
+        if (_detailCard is null || _detailFile is null)
+        {
+            DetailStatus.Text = "请先选择一个具体版本";
+            return;
+        }
+
+        DetailDownloadButton.IsEnabled = false;
+        DetailProgress.Visibility = Visibility.Visible;
+
+        try
+        {
+            // 目标版本沿用左侧列表中选中的游戏版本
+            var versionId = (VersionList.SelectedItem as VersionItem)?.Id;
+
+            if (string.IsNullOrWhiteSpace(versionId))
+            {
+                DetailStatus.Text = "请先在「原版游戏」或「模组加载器」里选中一个游戏版本";
+                return;
+            }
+
+            var type = CurrentResourceType();
+            await ResourceService.DownloadToVersionAsync(_detailFile, versionId, type);
+
+            // 一并下载用户勾选的前置
+            var checkedDeps = (DetailDependencyList.ItemsSource as IEnumerable<DependencyItem> ?? [])
+                .Where(d => d.IsChecked)
+                .ToList();
+
+            var gameVersion = DetailGameVersionCombo.SelectedItem as string;
+            if (gameVersion is "全部版本") gameVersion = null;
+            var loader = DetailLoaderCombo.SelectedItem as string;
+            if (loader is "不限") loader = null;
+            var isCurseForge = _detailCard.Source == "CurseForge";
+
+            foreach (var dep in checkedDeps)
+            {
+                var files = isCurseForge
+                    ? await ResourceService.GetCurseForgeFilesAsync(dep.ProjectId, gameVersion, loader)
+                    : await ResourceService.GetModrinthFilesAsync(dep.ProjectId, gameVersion, loader);
+
+                var pick = files.FirstOrDefault();
+                if (pick is not null) await ResourceService.DownloadToVersionAsync(pick, versionId, type);
+            }
+
+            DetailStatus.Text = checkedDeps.Count > 0
+                ? $"已下载到版本「{versionId}」，含 {checkedDeps.Count} 个前置"
+                : $"已下载到版本「{versionId}」";
+        }
+        catch (Exception ex)
+        {
+            DetailStatus.Text = "下载失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
+            Logger.Error(ex, "下载资源失败");
+        }
+        finally
+        {
+            DetailDownloadButton.IsEnabled = true;
+            DetailProgress.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    #endregion
 
     /// <summary>当前资源搜索的页码（从 1 开始）。</summary>
     private int _resourcePage = 1;
@@ -602,8 +812,17 @@ public sealed partial class DownloadPage : Page
     /// <summary>每页条数。两个源合并后单页最多为此值的两倍。</summary>
     private const int ResourcePageSize = 20;
 
-    /// <summary>是否正在加载，避免重复请求。</summary>
+    /// <summary>是否正在加载，仅用于进度条显示，不再用来丢弃新请求。</summary>
     private bool _loadingMore;
+
+    /// <summary>记录本次搜索中哪个源没有返回结果，显示在状态文字里。</summary>
+    private string? _sourceNote;
+
+    /// <summary>
+    /// 搜索请求序号。每次发起新搜索都会自增，
+    /// 迟到的旧响应据此丢弃，避免切换分类后列表仍停留在上一次的结果。
+    /// </summary>
+    private int _searchSeq;
 
     private async Task SearchResourcesAsync()
     {
@@ -620,7 +839,7 @@ public sealed partial class DownloadPage : Page
         _resourceGameVersion = gameVersion;
         _resourceType = CurrentResourceType();
 
-        await LoadResourcePageAsync(1);
+        await LoadResourcePageAsync(1, ++_searchSeq);
     }
 
     /// <summary>
@@ -628,9 +847,9 @@ public sealed partial class DownloadPage : Page
     /// 因为两个源的搜索接口单次最多返回固定条数，
     /// 用页码翻页比「加载更多」更直观。
     /// </summary>
-    private async Task LoadResourcePageAsync(int page)
+    private async Task LoadResourcePageAsync(int page, int seq = 0)
     {
-        if (_loadingMore) return;
+        if (seq == 0) seq = ++_searchSeq;
 
         _loadingMore = true;
         SelectedText.Text = $"正在加载第 {page} 页…";
@@ -652,6 +871,9 @@ public sealed partial class DownloadPage : Page
 
             var batch = cached ?? await FetchResourceBatchAsync((page - 1) * ResourcePageSize, default);
 
+            // 期间用户又切了分类或翻了页，本次结果作废
+            if (seq != _searchSeq) return;
+
             _resourcePage = page;
             _resources.Clear();
             foreach (var hit in batch) _resources.Add(ToCard(hit));
@@ -667,19 +889,24 @@ public sealed partial class DownloadPage : Page
                 SelectedText.Text = batch.Count == 0
                     ? "没有找到结果，试试其他关键词或切换类型"
                     : $"第 {page} 页 · 共 {_resources.Count} 个结果";
+                if (!string.IsNullOrEmpty(_sourceNote)) SelectedText.Text += " · " + _sourceNote;
             }
 
             UpdatePageButtons();
         }
         catch (Exception ex)
         {
+            if (seq != _searchSeq) return;
             SelectedText.Text = "搜索失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
             Logger.Error(ex, "搜索社区资源失败");
         }
         finally
         {
-            _loadingMore = false;
-            Dispatch(() => LoadMoreProgress.Visibility = Visibility.Collapsed);
+            if (seq == _searchSeq)
+            {
+                _loadingMore = false;
+                Dispatch(() => LoadMoreProgress.Visibility = Visibility.Collapsed);
+            }
         }
     }
 
@@ -727,17 +954,21 @@ public sealed partial class DownloadPage : Page
         // 0=全部 1=Modrinth 2=CurseForge
         var sourceIndex = ResourceSourceCombo?.SelectedIndex ?? 0;
 
-        var results = new List<ResourceHit>();
+        var modrinth = new List<ResourceHit>();
+        var curseforge = new List<ResourceHit>();
+        var modrinthFailed = false;
+        var curseforgeFailed = false;
 
         if (sourceIndex is 0 or 1)
         {
             try
             {
-                results.AddRange(await ResourceService.SearchModrinthAsync(query, type, gameVersion,
-                    limit: ResourcePageSize, offset: offset, ct: ct));
+                modrinth = await ResourceService.SearchModrinthAsync(query, type, gameVersion,
+                    limit: ResourcePageSize, offset: offset, ct: ct);
             }
             catch (Exception ex)
             {
+                modrinthFailed = true;
                 Logger.Warn($"Modrinth 搜索失败: {ex.Message}");
             }
         }
@@ -746,24 +977,54 @@ public sealed partial class DownloadPage : Page
         {
             try
             {
-                results.AddRange(await ResourceService.SearchCurseForgeAsync(query, type, gameVersion,
-                    limit: ResourcePageSize, offset: offset, ct: ct));
+                curseforge = await ResourceService.SearchCurseForgeAsync(query, type, gameVersion,
+                    limit: ResourcePageSize, offset: offset, ct: ct);
             }
             catch (Exception ex)
             {
+                curseforgeFailed = true;
                 Logger.Warn($"CurseForge 搜索失败: {ex.Message}");
             }
         }
 
-        // 去重：同一项目在两个源都可能出现，按名称 + 来源组合保留
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var merged = new List<ResourceHit>();
+        // 两个源的下载量量级差异很大，直接混排会让一边整体沉到后面。
+        // 改为各自按下载量排序，再按名次交替合并，这样任何一页都能看到两个源。
+        modrinth.Sort((a, b) => b.Downloads.CompareTo(a.Downloads));
+        curseforge.Sort((a, b) => b.Downloads.CompareTo(a.Downloads));
 
-        foreach (var hit in results.OrderByDescending(h => h.Downloads))
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var merged = new List<ResourceHit>(modrinth.Count + curseforge.Count);
+
+        for (var i = 0; i < Math.Max(modrinth.Count, curseforge.Count); i++)
         {
-            var key = $"{hit.Name}|{hit.Author}";
-            if (!seen.Add(key)) continue;
+            if (i < modrinth.Count) Add(modrinth[i]);
+            if (i < curseforge.Count) Add(curseforge[i]);
+        }
+
+        void Add(ResourceHit hit)
+        {
+            // 同一项目可能在两个源都出现，按名称 + 作者去重
+            if (!seen.Add($"{hit.Name}|{hit.Author}")) return;
             merged.Add(hit);
+        }
+
+        if (sourceIndex == 0)
+        {
+            _sourceNote = (modrinthFailed, curseforgeFailed) switch
+            {
+                (true, true) => "两个源都请求失败",
+                (true, false) => "Modrinth 请求失败，当前仅显示 CurseForge",
+                (false, true) => "CurseForge 请求失败，当前仅显示 Modrinth",
+                _ => modrinth.Count == 0
+                    ? "Modrinth 没有返回结果"
+                    : curseforge.Count == 0
+                        ? "CurseForge 没有返回结果"
+                        : null
+            };
+        }
+        else
+        {
+            _sourceNote = null;
         }
 
         return merged;
@@ -1082,14 +1343,24 @@ public sealed partial class DownloadPage : Page
         RefreshTasks();
     }
 
-    private async void CancelTask_Click(object sender, RoutedEventArgs e)
+    private void CancelTask_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button { Tag: string id }) return;
 
         var task = DownloadQueue.Tasks.FirstOrDefault(t => t.Id == id);
         if (task is null) return;
 
-        await ConfirmAndCancelTaskAsync(task);
+        // 已结束的任务只需从列表移除；进行中的任务由下载器自行清理 .part 临时文件。
+        // 两种情况都只影响这一条记录，不会动到同版本里的其它资源。
+        var wasRunning = task.State is DownloadState.Running or DownloadState.Idle
+            or DownloadState.Paused;
+
+        DownloadQueue.CancelAndRemove(id);
+        RefreshTasks();
+
+        ProgressText.Text = wasRunning
+            ? $"已取消「{task.Title}」"
+            : $"已从列表移除「{task.Title}」";
     }
 
     #endregion
@@ -1155,55 +1426,12 @@ public sealed partial class DownloadPage : Page
         }
     }
 
-    private async void Cancel_Click(object sender, RoutedEventArgs e)
+    private void Cancel_Click(object sender, RoutedEventArgs e)
     {
-        // 找出当前正在进行的任务，走「整版本清理」流程
-        var running = DownloadQueue.Tasks.FirstOrDefault(t =>
-            t.State is DownloadState.Running or DownloadState.Paused);
-
-        if (running is not null)
-        {
-            await ConfirmAndCancelTaskAsync(running);
-            return;
-        }
-
-        // 兜底：没有活跃任务时直接取消全部
+        // 取消当前所有未完成的下载，只清理各自的临时文件，不做版本级删除。
         _cts?.Cancel();
         DownloadQueue.Cancel();
-    }
-
-    /// <summary>弹出确认框并执行「取消 + 整版本清理」。</summary>
-    private async Task ConfirmAndCancelTaskAsync(DownloadTask task)
-    {
-        var versionHint = string.IsNullOrEmpty(task.TargetVersion)
-            ? string.Empty
-            : $"\n\n会连同版本「{task.TargetVersion}」的整个目录一并删除，" +
-              "包括已经下载完成的部分文件，以便下次安装从干净状态开始。";
-
-        var confirm = new ContentDialog
-        {
-            Title = "取消并清理下载",
-            Content = $"将取消「{task.Title}」并清理磁盘上的相关内容，确定继续吗？{versionHint}",
-            PrimaryButtonText = "取消并清理",
-            CloseButtonText = "只暂停",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = XamlRoot
-        };
-
-        if (await confirm.ShowAsync() != ContentDialogResult.Primary)
-        {
-            DownloadQueue.Pause(task.Id);
-            RefreshTasks();
-            ProgressText.Text = "已暂停下载，点击“继续”可续传";
-            return;
-        }
-
-        DownloadQueue.CancelAndPurge(task.Id);
-        DownloadQueue.PruneFinished();
-        RefreshTasks();
-        ProgressText.Text = string.IsNullOrEmpty(task.TargetVersion)
-            ? "已取消并清理下载内容"
-            : $"已取消，并删除版本「{task.TargetVersion}」的全部文件";
+        ProgressText.Text = "已取消下载";
     }
 
     private void SourceSettings_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("settings");
@@ -1241,6 +1469,8 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
+
 
 
 

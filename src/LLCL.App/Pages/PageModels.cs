@@ -43,6 +43,44 @@ public sealed class HistoryItem
     public string Time { get; init; } = string.Empty;
 }
 
+/// <summary>二级页面里的单个可下载版本。</summary>
+public sealed class ResourceFileItem
+{
+    public string Name { get; init; } = string.Empty;
+    public string Meta { get; init; } = string.Empty;
+    public LLCL.Core.Resources.ResourceFile File { get; init; } = new();
+}
+
+/// <summary>关于页的赞助者条目。</summary>
+public sealed class SponsorItem
+{
+    public string Name { get; init; } = string.Empty;
+    public string Amount { get; init; } = string.Empty;
+}
+
+/// <summary>可勾选的前置模组条目。</summary>
+public sealed class DependencyItem : System.ComponentModel.INotifyPropertyChanged
+{
+    public string ProjectId { get; init; } = string.Empty;
+    public string Label { get; init; } = string.Empty;
+    public bool IsRequired { get; init; }
+
+    private bool _isChecked;
+
+    public bool IsChecked
+    {
+        get => _isChecked;
+        set
+        {
+            if (_isChecked == value) return;
+            _isChecked = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(IsChecked)));
+        }
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+}
+
 public sealed class LanItem
 {
     public string Display { get; init; } = string.Empty;

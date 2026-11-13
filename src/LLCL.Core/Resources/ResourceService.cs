@@ -45,7 +45,30 @@ public sealed class ResourceFile
     public string VersionName { get; init; } = string.Empty;
     public string? GameVersions { get; init; }
     public string? Loaders { get; init; }
+
+    /// <summary>该文件声明的前置依赖。</summary>
+    public IReadOnlyList<ResourceDependency> Dependencies { get; init; } = [];
 }
+
+/// <summary>资源的前置依赖项。</summary>
+public sealed class ResourceDependency
+{
+    /// <summary>前置项目 ID；Modrinth 为字符串，CurseForge 为数字字符串。</summary>
+    public string ProjectId { get; init; } = string.Empty;
+
+    /// <summary>指定版本 ID，可能为空，表示任选可用版本。</summary>
+    public string? VersionId { get; init; }
+
+    /// <summary>依赖类型：required / optional / incompatible 等。</summary>
+    public string Kind { get; init; } = "required";
+
+    /// <summary>项目名称，取不到时回退为 ID。</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>是否为必须安装的前置。</summary>
+    public bool IsRequired => Kind.Equals("required", StringComparison.OrdinalIgnoreCase);
+}
+
 
 /// <summary>
 /// 社区资源下载：Modrinth 与 CurseForge（经 mcimirror 镜像）。
@@ -126,6 +149,48 @@ public static class ResourceService
         return hits;
     }
 
+    /// <summary>CurseForge 的加载器枚举值。</summary>
+    private static int LoaderToCurseForgeId(string loader) => loader.ToLowerInvariant() switch
+    {
+        "forge" => 1,
+        "fabric" => 4,
+        "quilt" => 5,
+        "neoforge" => 6,
+        _ => 0
+    };
+
+    /// <summary>查询项目名称，用于展示前置依赖。</summary>
+    public static async Task<string?> GetProjectNameAsync(ResourceSource source, string projectId,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var url = source == ResourceSource.Modrinth
+                ? $"{ModrinthApi}/project/{projectId}"
+                : $"{CurseForgeMirror}/mods/{projectId}";
+
+            var json = source == ResourceSource.Modrinth
+                ? await GetJsonWithFallbackAsync(url, ModrinthMirror + url[ModrinthApi.Length..], ct)
+                    .ConfigureAwait(false)
+                : await GetJsonAsync(url, ct).ConfigureAwait(false);
+
+            if (json is null) return null;
+
+            // CurseForge 的项目对象包在 data 里
+            var obj = source == ResourceSource.Modrinth
+                ? json as JsonObject
+                : json["data"] as JsonObject;
+
+            return obj?["title"]?.GetValue<string>() ?? obj?["name"]?.GetValue<string>();
+        }
+        catch (Exception ex)
+        {
+            Logger.Debug($"查询前置项目名称失败 {projectId}: {ex.Message}");
+            return null;
+        }
+    }
+
+
     /// <summary>获取 Modrinth 项目的可用文件列表。</summary>
     public static async Task<List<ResourceFile>> GetModrinthFilesAsync(string projectId, string? gameVersion,
         string? loader, CancellationToken ct = default)
@@ -154,6 +219,22 @@ public static class ResourceService
                     if (file is not JsonObject fileObj) continue;
                     var primary = fileObj["primary"]?.GetValue<bool>() ?? false;
 
+                    // 依赖挂在版本对象上，同一版本的所有文件共享
+                    var deps = new List<ResourceDependency>();
+                    if (obj["dependencies"] is JsonArray depArr)
+                    {
+                        foreach (var dep in depArr)
+                        {
+                            if (dep is not JsonObject depObj) continue;
+                            deps.Add(new ResourceDependency
+                            {
+                                ProjectId = depObj["project_id"]?.GetValue<string>() ?? string.Empty,
+                                VersionId = depObj["version_id"]?.GetValue<string>(),
+                                Kind = depObj["dependency_type"]?.GetValue<string>() ?? "required"
+                            });
+                        }
+                    }
+
                     files.Add(new ResourceFile
                     {
                         Url = fileObj["url"]?.GetValue<string>() ?? string.Empty,
@@ -166,7 +247,8 @@ public static class ResourceService
                             : null,
                         Loaders = obj["loaders"] is JsonArray ld
                             ? string.Join(", ", ld.Select(v => v?.GetValue<string>() ?? string.Empty))
-                            : null
+                            : null,
+                        Dependencies = deps.Where(d => !string.IsNullOrEmpty(d.ProjectId)).ToList()
                     });
 
                     if (primary) break;
@@ -221,11 +303,13 @@ public static class ResourceService
 
     /// <summary>获取 CurseForge 项目的文件列表。</summary>
     public static async Task<List<ResourceFile>> GetCurseForgeFilesAsync(string projectId, string? gameVersion,
-        CancellationToken ct = default)
+        string? loader = null, CancellationToken ct = default)
     {
         var url = $"{CurseForgeMirror}/mods/{projectId}/files?pageSize=50";
         if (!string.IsNullOrEmpty(gameVersion))
             url += $"&gameVersion={Uri.EscapeDataString(gameVersion)}";
+        if (!string.IsNullOrEmpty(loader) && LoaderToCurseForgeId(loader) is > 0 and var loaderId)
+            url += $"&modLoaderType={loaderId}";
 
         var json = await GetJsonAsync(url, ct).ConfigureAwait(false);
         if (json?["data"] is not JsonArray arr) return [];
@@ -236,6 +320,30 @@ public static class ResourceService
             if (item is not JsonObject obj) continue;
             var downloadUrl = obj["downloadUrl"]?.GetValue<string>();
             if (string.IsNullOrEmpty(downloadUrl)) continue;
+
+            var deps = new List<ResourceDependency>();
+            if (obj["dependencies"] is JsonArray depArr)
+            {
+                foreach (var dep in depArr)
+                {
+                    if (dep is not JsonObject depObj) continue;
+                    var modId = depObj["modId"]?.GetValue<long>();
+                    if (modId is null or 0) continue;
+
+                    // relationType: 2=可选 3=必需 5=不兼容，其余按可选处理
+                    var relation = depObj["relationType"]?.GetValue<int>() ?? 0;
+                    deps.Add(new ResourceDependency
+                    {
+                        ProjectId = modId.Value.ToString(),
+                        Kind = relation switch
+                        {
+                            3 => "required",
+                            5 => "incompatible",
+                            _ => "optional"
+                        }
+                    });
+                }
+            }
 
             files.Add(new ResourceFile
             {
@@ -248,7 +356,8 @@ public static class ResourceService
                 VersionName = obj["displayName"]?.GetValue<string>() ?? string.Empty,
                 GameVersions = obj["gameVersions"] is JsonArray gv
                     ? string.Join(", ", gv.Select(v => v?.GetValue<string>() ?? string.Empty))
-                    : null
+                    : null,
+                Dependencies = deps
             });
         }
 
