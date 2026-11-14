@@ -47,7 +47,8 @@
                     -->
                     <Grid>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="93" />
+                            <!-- 头像高 140，露出 70（约一半）在卡片外 -->
+                            <RowDefinition Height="70" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
@@ -112,9 +113,7 @@
 
                         <!--
                           头像：无边框，跨两行从顶部开始绘制。
-                          AvatarShadowHost 是一个不透明的容器，专门用来承载投影：
-                          直接把 Shadow 挂在透明的 Grid 上会产生空遮罩，
-                          表现为阴影完全不显示。
+                          第一行高 70px，头像高 140px，因此正好一半在卡片内。
                         -->
                         <Border x:Name="AvatarShadowHost"
                                 Grid.Row="0" Grid.RowSpan="2"

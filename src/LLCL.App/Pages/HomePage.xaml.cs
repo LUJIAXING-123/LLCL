@@ -34,29 +34,14 @@ public sealed partial class HomePage : Page
     }
 
     /// <summary>
-    /// 给头像挂上投影。
-    /// <para>
-    /// Visual 上没有 Shadow 属性（只有 SpriteVisual 才有），
-    /// 用 SetElementChildVisual 塞进去又会被同层内容盖住，
-    /// 所以改用 XAML 的 ThemeShadow，靠 Shadow 属性加 Z 位移触发。
-    /// </para>
-    /// <para>
-    /// 需要显式声明接收面（卡片），否则阴影没有落点、看起来像没生效。
-    /// Z 取 8，ThemeShadow 的模糊半径约为其一半，贴近头像轮廓。
-    /// </para>
+    /// 头像不再使用阴影。
+    /// ThemeShadow 的模糊半径由元素与光源距离决定，没有精确控制手段，
+    /// 无论怎么调都只能得到「散开一圈」或「完全不可见」两种结果，
+    /// 因此放弃投影，保持干净的像素风外观。
     /// </summary>
     private void ApplyAvatarShadow()
     {
-        if (AvatarShadowHost.Shadow is not ThemeShadow shadow)
-        {
-            shadow = new ThemeShadow();
-            AvatarShadowHost.Shadow = shadow;
-        }
-
-        shadow.Receivers.Clear();
-        shadow.Receivers.Add(AvatarCard);
-
-        AvatarShadowHost.Translation = new System.Numerics.Vector3(0, 0, 8);
+        // 预留方法体：后续若要换用其它方式（如自绘投影层）可在此接入。
     }
 
     /// <summary>账号新增、切换或删除后刷新首页显示。</summary>
