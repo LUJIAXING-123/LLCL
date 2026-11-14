@@ -929,8 +929,12 @@ public sealed partial class DownloadPage : Page
     private string? _resourceGameVersion;
     private ResourceType _resourceType;
 
-    /// <summary>每页条数。两个源合并后单页最多为此值的两倍。</summary>
-    private const int ResourcePageSize = 20;
+    /// <summary>
+    /// 每个源单次请求的条数，取 40 与 PCL 的 RESULT_PAGE_SIZE 一致。
+    /// 候选池越大，两个源混排得越均匀；若取 20，热门项目高度集中在
+    /// 某一个源时容易整页都被该源占满。
+    /// </summary>
+    private const int ResourcePageSize = 40;
 
     /// <summary>是否正在加载，仅用于进度条显示，不再用来丢弃新请求。</summary>
     private bool _loadingMore;
@@ -1155,24 +1159,28 @@ public sealed partial class DownloadPage : Page
     private static List<ResourceHit> MergeByScore(List<ResourceHit> modrinth,
         List<ResourceHit> curseforge, ResourceType type, string? query)
     {
-        // 不去重：PCL-CE 只调整顺序、不剔除重复项，
-        // 同一模组在两个源各占一条是它的正常表现。
+        // 不做去重。
+        // PCL 的 IsLike 依赖 ModLoader、支持的 MC 版本列表与更新时间，
+        // 三者都一致才判定为同一项目；这些字段在搜索结果里没有完整保留，
+        // 仅按名称比较会把 Sodium、Iris 这类双源都上架的项目误删，
+        // 导致它们的真实下载量被丢弃、排名整体失真。
+        // 宁可重复显示，也要保证排序依据正确。
         var all = new List<ResourceHit>(modrinth.Count + curseforge.Count);
         all.AddRange(modrinth);
         all.AddRange(curseforge);
 
         if (all.Count == 0) return all;
 
-        // 源权重。用 PCL 截图里前 12 名的真实下载量反推：
-        // JEI 的 CurseForge 下载量 6.47 亿排在 1.31 亿与 1.11 亿之间，
-        // 因此 Modrinth 的权重必须落在 4.94~5.83，取 5 才能复现该排名。
-        // 按源码里写的 7 计算时，Modrinth 第 20 名（0.95亿 x 7 = 6.61亿）
-        // 会压过 JEI 的 6.47 亿，导致前 20 条全部来自 Modrinth。
+        // 源权重，取自 PCL 的 ResourceSearcher.vb（注意与 PCL-CE 不同）：
+        //   Mod/整合包       CurseForge 1  / Modrinth 5
+        //   数据包           CurseForge 10 / Modrinth 1
+        //   资源包/光影      CurseForge 1  / Modrinth 4
+        // PCL-CE 里的对应值是 7 与 5，这也是两边排名不同的根源。
         static double Weight(ResourceSource source, ResourceType type) => type switch
         {
             ResourceType.Mod or ResourceType.Modpack => source == ResourceSource.CurseForge ? 1 : 5,
-            ResourceType.ResourcePack or ResourceType.Shader => source == ResourceSource.CurseForge ? 1 : 5,
-            _ => 1
+            ResourceType.ResourcePack or ResourceType.Shader => source == ResourceSource.CurseForge ? 1 : 4,
+            _ => source == ResourceSource.CurseForge ? 10 : 1
         };
 
         var hasQuery = !string.IsNullOrWhiteSpace(query);
@@ -1206,10 +1214,32 @@ public sealed partial class DownloadPage : Page
     }
 
     /// <summary>
-    /// 规范化项目名称用于去重。
+    /// 判断两条结果是否指向同一个项目，用于跨源去重。
+    /// <para>
+    /// 照 PCL 的 IsLike 收紧条件：只提取字母数字比较名称，且要求来源不同。
+    /// 仅凭名称相同就合并会把「Sodium」这类两个源都有的项目误删。
+    /// </para>
+    /// <para>
+    /// PCL 还会比对 ModLoader、支持的 MC 版本与更新时间，
+    /// 这些字段在搜索结果里没有完整保留，因此这里只做名称层面的判断，
+    /// 宁可少合并也不要错删。
+    /// </para>
+    /// </summary>
+    private static bool IsSameProject(ResourceHit a, ResourceHit b)
+    {
+        // 同源不合并
+        if (a.Source == b.Source) return false;
+
+        var left = Normalize(a.Name);
+        var right = Normalize(b.Name);
+
+        return left.Length > 0 && left == right;
+    }
+
+    /// <summary>
+    /// 规范化项目名称用于比较：去掉括号内容、只保留字母数字、忽略大小写。
     /// 两个源对同一模组的命名常有差异，例如
-    /// 「Cloth Config API」与「Cloth Config API (Fabric/Forge/NeoForge)」，
-    /// 因此去掉括号内容、空格与大小写差异后再比较。
+    /// 「Cloth Config API」与「Cloth Config API (Fabric/Forge/NeoForge)」。
     /// </summary>
     private static string Normalize(string name)
     {
