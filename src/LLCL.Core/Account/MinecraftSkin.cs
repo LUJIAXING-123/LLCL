@@ -55,6 +55,33 @@ public static class MinecraftSkin
     /// <summary>清空缓存，切换皮肤后可调用。</summary>
     public static void ClearCache() => Cache.Clear();
 
+    /// <summary>
+    /// 按 UUID 挑选默认皮肤是 Steve 还是 Alex，规则与 PCL-CE 一致：
+    /// 取 UUID 中第 8、16、24、32 个字符的十六进制值异或，
+    /// 结果为奇数用 Alex，偶数用 Steve；UUID 长度不为 32 时一律用 Steve。
+    /// <para>
+    /// 离线账号没有真实皮肤，用这个规则可保证同一用户名始终对应同一个形象。
+    /// </para>
+    /// </summary>
+    public static bool IsAlex(string? uuid)
+    {
+        if (string.IsNullOrEmpty(uuid) || uuid.Length != 32) return false;
+
+        var sum = 0;
+        foreach (var index in new[] { 7, 15, 23, 31 })
+        {
+            var c = uuid[index];
+            var value = c is >= '0' and <= '9' ? c - '0'
+                : c is >= 'a' and <= 'f' ? c - 'a' + 10
+                : c is >= 'A' and <= 'F' ? c - 'A' + 10
+                : 0;
+
+            sum ^= value;
+        }
+
+        return sum % 2 != 0;
+    }
+
     private static async Task<string?> GetSkinUrlAsync(string uuid, string? yggdrasilBase,
         CancellationToken ct)
     {

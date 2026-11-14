@@ -112,15 +112,30 @@ public sealed partial class HomePage : Page
     }
 
     /// <summary>
+    /// <summary>
     /// 加载并合成账号头像。
-    /// 皮肤来自 sessionserver，按 PCL-CE 的坐标裁出脸层与帽子层再叠放。
-    /// 离线账号或取不到皮肤时显示首字母占位。
+    /// 在线账号从 sessionserver 取皮肤；离线账号按 PCL-CE 的规则
+    /// 用内置的 Steve / Alex 皮肤，保证同一用户名始终对应同一形象。
     /// </summary>
     private async Task LoadAvatarAsync(AccountEntry? account, string displayName)
     {
         try
         {
-            if (account is null || string.IsNullOrWhiteSpace(account.Uuid))
+            // 离线账号：没有真实皮肤，按 UUID 选用内置 Steve / Alex
+            if (account is null || account.Kind == AccountKind.Offline)
+            {
+                var offlineSkin = LoadDefaultSkin(account?.Uuid);
+                if (offlineSkin is null)
+                {
+                    ShowAvatarFallback(displayName);
+                    return;
+                }
+
+                await ApplyHeadAsync(offlineSkin, displayName);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(account.Uuid))
             {
                 ShowAvatarFallback(displayName);
                 return;
@@ -130,30 +145,68 @@ public sealed partial class HomePage : Page
             var yggdrasil = account.Kind == AccountKind.ThirdParty ? account.ServerUrl : null;
 
             var skin = await MinecraftSkin.GetSkinAsync(account.Uuid, yggdrasil);
+
+            // 在线账号取不到皮肤时也回退到内置皮肤，比纯色块更自然
+            skin ??= LoadDefaultSkin(account.Uuid);
             if (skin is null)
             {
                 ShowAvatarFallback(displayName);
                 return;
             }
 
-            var head = await SkinHeadRenderer.RenderAsync(skin);
-            if (head is null)
-            {
-                ShowAvatarFallback(displayName);
-                return;
-            }
-
-            Dispatch(() =>
-            {
-                AvatarImage.Source = head;
-                AvatarImage.Visibility = Visibility.Visible;
-                AvatarFallback.Visibility = Visibility.Collapsed;
-            });
+            await ApplyHeadAsync(skin, displayName);
         }
         catch (Exception ex)
         {
             Logger.Warn($"加载头像失败: {ex.Message}");
             ShowAvatarFallback(displayName);
+        }
+    }
+
+    /// <summary>把皮肤合成为头像并显示。</summary>
+    private async Task ApplyHeadAsync(byte[] skin, string displayName)
+    {
+        var head = await SkinHeadRenderer.RenderAsync(skin);
+        if (head is null)
+        {
+            ShowAvatarFallback(displayName);
+            return;
+        }
+
+        Dispatch(() =>
+        {
+            AvatarImage.Source = head;
+            AvatarImage.Visibility = Visibility.Visible;
+            AvatarFallback.Visibility = Visibility.Collapsed;
+        });
+    }
+
+    /// <summary>
+    /// 读取内置的 Steve / Alex 皮肤。
+    /// 选择规则与 PCL-CE 的 McSkinSex 一致：UUID 特定位异或为奇数则 Alex。
+    /// </summary>
+    private static byte[]? LoadDefaultSkin(string? uuid)
+    {
+        var name = MinecraftSkin.IsAlex(uuid) ? "alex" : "steve";
+
+        try
+        {
+            using var stream = System.Reflection.Assembly.GetExecutingAssembly()
+                .GetManifestResourceStream($"LLCL.Assets.{name}.png");
+            if (stream is null)
+            {
+                Logger.Warn($"内置皮肤缺失: {name}.png");
+                return null;
+            }
+
+            using var ms = new MemoryStream();
+            stream.CopyTo(ms);
+            return ms.ToArray();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"读取内置皮肤失败 {name}: {ex.Message}");
+            return null;
         }
     }
 

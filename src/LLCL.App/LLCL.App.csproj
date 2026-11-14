@@ -85,6 +85,10 @@
         <EmbeddedResource Include="Assets\donate-qrcode.png"
                           LogicalName="LLCL.Assets.donate-qrcode.png"
                           Condition="Exists('Assets\donate-qrcode.png')" />
+
+        <!-- 离线账号使用的默认皮肤（与 PCL-CE 一致） -->
+        <EmbeddedResource Include="Assets\steve.png" LogicalName="LLCL.Assets.steve.png" />
+        <EmbeddedResource Include="Assets\alex.png" LogicalName="LLCL.Assets.alex.png" />
     </ItemGroup>
 
     <ItemGroup>
