@@ -1159,15 +1159,19 @@ public sealed partial class DownloadPage : Page
     private static List<ResourceHit> MergeByScore(List<ResourceHit> modrinth,
         List<ResourceHit> curseforge, ResourceType type, string? query)
     {
-        // 不做去重。
-        // PCL 的 IsLike 依赖 ModLoader、支持的 MC 版本列表与更新时间，
-        // 三者都一致才判定为同一项目；这些字段在搜索结果里没有完整保留，
-        // 仅按名称比较会把 Sodium、Iris 这类双源都上架的项目误删，
-        // 导致它们的真实下载量被丢弃、排名整体失真。
-        // 宁可重复显示，也要保证排序依据正确。
-        var all = new List<ResourceHit>(modrinth.Count + curseforge.Count);
-        all.AddRange(modrinth);
-        all.AddRange(curseforge);
+        // 照 PCL 的 ResourceSearcher.vb：先按平台分组（CurseForge 在前）再去重，
+        // 顺序固定可避免两个请求返回顺序不同导致排名抖动。
+        var ordered = new List<ResourceHit>(curseforge.Count + modrinth.Count);
+        ordered.AddRange(curseforge);
+        ordered.AddRange(modrinth);
+
+        var all = new List<ResourceHit>(ordered.Count);
+
+        foreach (var hit in ordered)
+        {
+            if (!all.Any(existing => IsSameProject(existing, hit, type)))
+                all.Add(hit);
+        }
 
         if (all.Count == 0) return all;
 
@@ -1214,26 +1218,47 @@ public sealed partial class DownloadPage : Page
     }
 
     /// <summary>
-    /// 判断两条结果是否指向同一个项目，用于跨源去重。
+    /// 判断两条结果是否指向同一个项目，逐条对应 PCL 的 ResourceProject.IsLike。
     /// <para>
-    /// 照 PCL 的 IsLike 收紧条件：只提取字母数字比较名称，且要求来源不同。
-    /// 仅凭名称相同就合并会把「Sodium」这类两个源都有的项目误删。
-    /// </para>
-    /// <para>
-    /// PCL 还会比对 ModLoader、支持的 MC 版本与更新时间，
-    /// 这些字段在搜索结果里没有完整保留，因此这里只做名称层面的判断，
-    /// 宁可少合并也不要错删。
+    /// PCL 的判定是有序的短路径：任意一条不满足就直接判为不同项目，
+    /// 只有全部通过才继续比对名称类字段。这样可以避免「名字相同但其实是两个项目」
+    /// 造成的误删，例如 Sodium 在两个源都有真实条目。
     /// </para>
     /// </summary>
-    private static bool IsSameProject(ResourceHit a, ResourceHit b)
+    private static bool IsSameProject(ResourceHit a, ResourceHit b, ResourceType type)
     {
-        // 同源不合并
+        // 1) 必须来自不同的网站，同源不合并
         if (a.Source == b.Source) return false;
 
-        var left = Normalize(a.Name);
-        var right = Normalize(b.Name);
+        // 2) Mod 加载器必须一致
+        if (!SameField(a.Loaders, b.Loaders)) return false;
 
-        return left.Length > 0 && left == right;
+        // 3) 除光影外，支持的 MC 版本必须一致
+        if (type != ResourceType.Shader && !SameField(a.GameVersions, b.GameVersions)) return false;
+
+        // 4) 最近更新时间相差不超过一周
+        if (a.Updated is { } au && b.Updated is { } bu &&
+            Math.Abs((au - bu).TotalDays) > 7) return false;
+
+        // 5) 原名、描述或 slug 的字母数字部分相同
+        if (a.Name == b.Name) return true;
+        if (!string.IsNullOrEmpty(a.Description) && a.Description == b.Description) return true;
+
+        var leftSlug = Normalize(a.Slug);
+        var rightSlug = Normalize(b.Slug);
+        if (leftSlug.Length > 0 && leftSlug == rightSlug) return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// 比较两个已排序的逗号分隔串，任一为空时视为无法判定，按相同处理，
+    /// 以免因缺少字段而把真实重复项当成两个项目。
+    /// </summary>
+    private static bool SameField(string? a, string? b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return true;
+        return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

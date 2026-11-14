@@ -33,6 +33,18 @@ public sealed class ResourceHit
     public ResourceType Type { get; init; }
     public string? LatestVersion { get; init; }
     public string? Categories { get; init; }
+
+    /// <summary>标识名，用于跨源判重（PCL 的 IsLike 会比对 slug）。</summary>
+    public string Slug { get; init; } = string.Empty;
+
+    /// <summary>支持的 Mod 加载器，已排序合并为字符串，用于跨源判重。</summary>
+    public string? Loaders { get; init; }
+
+    /// <summary>支持的 MC 版本，已排序合并为字符串，用于跨源判重。</summary>
+    public string? GameVersions { get; init; }
+
+    /// <summary>最后更新时间，用于跨源判重。</summary>
+    public DateTime? Updated { get; init; }
 }
 
 /// <summary>可下载的具体文件。</summary>
@@ -127,6 +139,18 @@ public static class ResourceService
         foreach (var item in arr)
         {
             if (item is not JsonObject obj) continue;
+
+            // Modrinth 的 versions 是支持的 MC 版本列表，categories 里混有加载器名
+            var modrinthVersions = obj["versions"] is JsonArray vArr
+                ? string.Join(",", vArr.Select(v => v?.GetValue<string>() ?? string.Empty)
+                    .Where(s => s.Length > 0).OrderBy(s => s, StringComparer.Ordinal))
+                : null;
+
+            var modrinthLoaders = obj["categories"] is JsonArray cArr
+                ? string.Join(",", cArr.Select(c => c?.GetValue<string>() ?? string.Empty)
+                    .Where(IsLoaderName).OrderBy(s => s, StringComparer.Ordinal))
+                : null;
+
             hits.Add(new ResourceHit
             {
                 Id = obj["project_id"]?.GetValue<string>() ?? string.Empty,
@@ -137,6 +161,10 @@ public static class ResourceService
                 IconUrl = obj["icon_url"]?.GetValue<string>(),
                 Source = ResourceSource.Modrinth,
                 Type = type,
+                Slug = obj["slug"]?.GetValue<string>() ?? string.Empty,
+                Loaders = modrinthLoaders,
+                GameVersions = modrinthVersions,
+                Updated = ParseDate(obj["date_modified"]),
                 LatestVersion = obj["versions"] is JsonArray vs && vs.Count > 0
                     ? vs[^1]?.GetValue<string>()
                     : null,
@@ -147,6 +175,17 @@ public static class ResourceService
         }
 
         return hits;
+    }
+
+    /// <summary>判断分类名是否为 Mod 加载器。</summary>
+    private static bool IsLoaderName(string name) =>
+        name is "forge" or "fabric" or "neoforge" or "quilt" or "liteloader" or "rift";
+
+    /// <summary>解析 API 返回的时间字符串。</summary>
+    private static DateTime? ParseDate(JsonNode? node)
+    {
+        var text = node?.GetValue<string>();
+        return DateTime.TryParse(text, out var value) ? value : null;
     }
 
     /// <summary>CurseForge 的加载器枚举值。</summary>
@@ -287,6 +326,40 @@ public static class ResourceService
         foreach (var item in arr)
         {
             if (item is not JsonObject obj) continue;
+
+            // latestFilesIndexes 里同时带着 MC 版本与加载器，按项目去重合并
+            string? cfVersions = null;
+            string? cfLoaders = null;
+            if (obj["latestFilesIndexes"] is JsonArray indexes)
+            {
+                var versions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var loaders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var entry in indexes)
+                {
+                    if (entry is not JsonObject e) continue;
+
+                    var gv = e["gameVersion"]?.GetValue<string>();
+                    if (!string.IsNullOrEmpty(gv)) versions.Add(gv);
+
+                    var loader = e["modLoader"]?.GetValue<int>() ?? 0;
+                    var name = loader switch
+                    {
+                        1 => "forge",
+                        4 => "fabric",
+                        5 => "quilt",
+                        6 => "neoforge",
+                        _ => null
+                    };
+                    if (name is not null) loaders.Add(name);
+                }
+
+                if (versions.Count > 0)
+                    cfVersions = string.Join(",", versions.OrderBy(s => s, StringComparer.Ordinal));
+                if (loaders.Count > 0)
+                    cfLoaders = string.Join(",", loaders.OrderBy(s => s, StringComparer.Ordinal));
+            }
+
             hits.Add(new ResourceHit
             {
                 Id = obj["id"]?.GetValue<long>().ToString() ?? string.Empty,
@@ -299,6 +372,10 @@ public static class ResourceService
                 IconUrl = obj["logo"]?["thumbnailUrl"]?.GetValue<string>(),
                 Source = ResourceSource.CurseForge,
                 Type = type,
+                Slug = obj["slug"]?.GetValue<string>() ?? string.Empty,
+                Loaders = cfLoaders,
+                GameVersions = cfVersions,
+                Updated = ParseDate(obj["dateModified"]),
                 LatestVersion = obj["latestFilesIndexes"] is JsonArray idx && idx.Count > 0
                     ? idx[0]?["filename"]?.GetValue<string>()
                     : null
