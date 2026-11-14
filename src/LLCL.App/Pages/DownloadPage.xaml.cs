@@ -1132,17 +1132,17 @@ public sealed partial class DownloadPage : Page
     }
 
     /// <summary>
-    /// 合并两个源的结果，算法参照 PCL-CE 的 CompProjectsGet。
+    /// 合并两个源的结果并统一排序。
     /// <para>
-    /// 不采用「各自排序后交替插入」：那种做法会让排名的含义失真，
-    /// 用户看到的第一名可能下载量远低于第二页。
+    /// 关键点：两站的下载量本身处于同一量级（实测 Modrinth 最高 2.87 亿、
+    /// CurseForge 最高 6.47 亿），差异不到 3 倍，远没有到需要加权的地步。
+    /// 之前的做法是「下载量 × 权重 再取对数」，而
+    /// log(a×7) = log(a) + log(7) 意味着给该源每个项目无条件加一个常数分，
+    /// 结果是一个源整体压过另一个源，表现为前 20 条全来自同一个源。
     /// </para>
     /// <para>
-    /// 这里改为加权评分后统一排序：
-    /// 1. 各源下载量乘以一个按资源类型定的权重，抵消两站量级差异；
-    /// 2. 取 log10 压缩数量级，否则下载量大的源会完全压制另一个；
-    /// 3. 除以 9 归一到 0~1；
-    /// 4. 同项目只保留先出现的（Modrinth 优先）。
+    /// 现在的做法是各源除以本批结果的最大值，归一到 0~1 再排序：
+    /// 既消除了两站统计口径的细微差异，又不会改变项目之间的相对次序。
     /// </para>
     /// </summary>
     private static List<ResourceHit> MergeByScore(List<ResourceHit> modrinth,
@@ -1154,16 +1154,14 @@ public sealed partial class DownloadPage : Page
 
         foreach (var hit in modrinth.Concat(curseforge))
         {
-            if (seen.Add($"{hit.Name}|{hit.Author}")) all.Add(hit);
+            if (seen.Add(Normalize(hit.Name))) all.Add(hit);
         }
 
-        // 各源的权重：让两个站在同一量级上比较
-        static double Weight(ResourceSource source, ResourceType type) => type switch
-        {
-            ResourceType.Mod or ResourceType.Modpack => source == ResourceSource.CurseForge ? 1 : 7,
-            ResourceType.ResourcePack or ResourceType.Shader => source == ResourceSource.CurseForge ? 1 : 5,
-            _ => 1
-        };
+        if (all.Count == 0) return all;
+
+        // 各源本批的最大下载量，用于归一化
+        var modrinthMax = modrinth.Count == 0 ? 0 : modrinth.Max(h => h.Downloads);
+        var curseForgeMax = curseforge.Count == 0 ? 0 : curseforge.Max(h => h.Downloads);
 
         var hasQuery = !string.IsNullOrWhiteSpace(query);
         var needle = query?.Trim() ?? string.Empty;
@@ -1172,14 +1170,13 @@ public sealed partial class DownloadPage : Page
 
         foreach (var hit in all)
         {
-            var weighted = Math.Max(hit.Downloads, 1) * Weight(hit.Source, type);
-            var score = Math.Log10(weighted) / 9;
+            var max = hit.Source == ResourceSource.Modrinth ? modrinthMax : curseForgeMax;
+            var normalised = max > 0 ? (double)hit.Downloads / max : 0;
+
+            var score = normalised;
 
             // 有关键词时叠加匹配度，让精确命中的项目排到前面
-            if (hasQuery)
-            {
-                score += MatchScore(hit, needle);
-            }
+            if (hasQuery) score += MatchScore(hit, needle);
 
             scored.Add((hit, score));
         }
@@ -1188,6 +1185,23 @@ public sealed partial class DownloadPage : Page
             .OrderByDescending(x => x.Score)
             .Select(x => x.Hit)
             .ToList();
+    }
+
+    /// <summary>
+    /// 规范化项目名称用于去重。
+    /// 两个源对同一模组的命名常有差异，例如
+    /// 「Cloth Config API」与「Cloth Config API (Fabric/Forge/NeoForge)」，
+    /// 因此去掉括号内容、空格与大小写差异后再比较。
+    /// </summary>
+    private static string Normalize(string name)
+    {
+        var text = name;
+
+        // 去掉括号及其内容
+        var open = text.IndexOfAny(['(', '（']);
+        if (open > 0) text = text[..open];
+
+        return new string(text.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
     }
 
     /// <summary>
