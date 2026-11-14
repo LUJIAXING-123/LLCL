@@ -340,8 +340,7 @@ public static class MicrosoftAuth
         var mcToken = mc?["access_token"]?.GetValue<string>();
 
         if (mcToken is null)
-        {
-            Logger.Warn($"Minecraft 登录失败 HTTP {mcStatus}: {mc?.ToJsonString() ?? "空响应"}");
+        {            Logger.Warn($"Minecraft 登录失败 HTTP {mcStatus}: {mc?.ToJsonString() ?? "空响应"}");
 
             if (mcStatus is 401 or 403)
             {
@@ -358,6 +357,10 @@ public static class MicrosoftAuth
                 $"获取 Minecraft 令牌失败（HTTP {mcStatus}），请检查网络后重试");
         }
 
+        // 令牌签发成功说明 XSTS 链路无误，问题只可能出在账号权限上，
+        // 记下来便于区分「权限不足」与「网络/参数错误」。
+        Logger.Info($"[认证诊断] Minecraft 令牌已签发，uhs={uhs}");
+
         progress?.Invoke("正在确认游戏所有权…");
 
         // 4. 档案（确认是否拥有游戏）
@@ -369,9 +372,19 @@ public static class MicrosoftAuth
             // 404 表示该账号没有 Minecraft 档案，即未购买
             if (profileResult.Status == 404)
             {
+                // 把当前登录的 Xbox 用户哈希记进日志：
+                // 若两次登录的 uhs 不同，说明浏览器自动登入了另一个账号。
+                Logger.Warn($"[认证诊断] profile 404，当前 Xbox 用户哈希 uhs={uhs}");
+
                 throw new AuthException(
-                    "该微软账号没有购买 Minecraft。\n" +
-                    "请确认登录的账号与购买游戏时使用的是同一个微软账号。");
+                    "该微软账号没有 Java 版 Minecraft 档案。\n\n" +
+                    "认证过程本身是成功的（Xbox 登录正常、令牌已签发），" +
+                    "只是这个账号名下查不到游戏。常见原因：\n" +
+                    "1. 浏览器自动登录了另一个微软账号 —— 请用无痕窗口重新登录，\n" +
+                    "   并确认页面上显示的邮箱是正确的购买账号；\n" +
+                    "2. 刚购买、Mojang 侧尚未同步，可等几分钟到几小时后重试；\n" +
+                    "3. 购买的是基岩版而非 Java 版。\n\n" +
+                    $"当前登录的 Xbox 用户哈希：{uhs}");
             }
 
             if (profileResult.Status == 401)
