@@ -42,24 +42,28 @@
 
                     <!--
                       启动卡片。
-                      第一行高 43px（约 2/3 头像高度），卡片从第二行开始，
-                      于是头像上 43px 露在卡片外、下 21px 落在卡片内。
+                      第一行高 93px（约 2/3 头像高度 140），卡片从第二行开始，
+                      于是头像上 93px 露在卡片外、下 47px 落在卡片内。
                     -->
                     <Grid>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="43" />
+                            <RowDefinition Height="93" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
-                        <Border Grid.Row="1" Style="{StaticResource CardStyle}">
+                        <!--
+                          上内边距 56px：头像落在卡片内的部分高 47px，
+                          再留 9px 间隙，让正文从头像下方开始。
+                          其余三边保持 16px，内容贴左，不留空列。
+                        -->
+                        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="16,56,16,16">
                             <Grid ColumnSpacing="16">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="64" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
 
-                                <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
+                                <StackPanel Spacing="8" VerticalAlignment="Center">
                                     <StackPanel Spacing="2">
                                         <TextBlock Text="启动游戏" FontSize="16" FontWeight="SemiBold" />
                                         <TextBlock x:Name="CurrentVersionText"
@@ -77,10 +81,10 @@
                                                TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
 
-                                <!-- 启动按钮：整块色底 + 圆角，样式对齐微软商店 -->
-                                <Button Grid.Column="2" x:Name="LaunchButton" Content="启动"
+                                <!-- 启动按钮：宽度与头像边长一致，样式对齐微软商店 -->
+                                <Button Grid.Column="1" x:Name="LaunchButton" Content="启动"
                                         Style="{StaticResource AccentButtonStyle}"
-                                        Height="52" MinWidth="200" Padding="32,0"
+                                        Width="140" Height="52" Padding="0"
                                         CornerRadius="4" FontSize="16" FontWeight="SemiBold"
                                         VerticalAlignment="Center"
                                         Click="LaunchButton_Click" />
@@ -89,7 +93,7 @@
 
                         <!-- 头像：无边框，跨两行从顶部开始绘制 -->
                         <Grid Grid.Row="0" Grid.RowSpan="2"
-                              Width="64" Height="64"
+                              Width="140" Height="140"
                               HorizontalAlignment="Left" VerticalAlignment="Top"
                               Margin="20,0,0,0"
                               IsHitTestVisible="False">
@@ -97,7 +101,7 @@
                             <Border x:Name="AvatarFallback"
                                     Background="{ThemeResource AccentFillColorDefaultBrush}"
                                     Visibility="Collapsed">
-                                <TextBlock x:Name="AvatarInitial" FontSize="26" FontWeight="Bold"
+                                <TextBlock x:Name="AvatarInitial" FontSize="56" FontWeight="Bold"
                                            Foreground="White"
                                            HorizontalAlignment="Center" VerticalAlignment="Center" />
                             </Border>

@@ -20,14 +20,14 @@ namespace LLCL.Services;
 public static class SkinHeadRenderer
 {
     /// <summary>
-    /// 输出头像边长。
+    /// 输出头像边长。与启动按钮宽度保持一致。
     /// 位图直接按最终显示尺寸生成，界面上 1:1 显示，
     /// 这样不会触发缩放插值，像素保持清晰。
     /// </summary>
-    public const int Size = 64;
+    public const int Size = 140;
 
-    /// <summary>脸层相对输出图的内缩，形成一圈帽檐。</summary>
-    private const int HatMargin = 4;
+    /// <summary>脸层相对输出图的内缩，按比例取 8/140。</summary>
+    private const int HatMargin = 8;
 
     /// <summary>皮肤贴图中脸层左上角坐标。</summary>
     private const int FaceU = 8;
