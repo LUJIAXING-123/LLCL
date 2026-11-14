@@ -57,7 +57,7 @@
                           启动按钮贴右并横向拉长。
                           底部单独留一行放进度条，紧贴卡片下沿。
                         -->
-                        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="0">
+                        <Border x:Name="AvatarCard" Grid.Row="1" Style="{StaticResource CardStyle}" Padding="0">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="*" />
@@ -112,24 +112,28 @@
 
                         <!--
                           头像：无边框，跨两行从顶部开始绘制。
-                          阴影不使用 ThemeShadow（其半径由光源距离决定，无法精确控制，
-                          表现为阴影散开、贴不住轮廓），
-                          改为在代码里挂 Composition 的 DropShadow，见 ApplyAvatarShadow。
+                          AvatarShadowHost 是一个不透明的容器，专门用来承载投影：
+                          直接把 Shadow 挂在透明的 Grid 上会产生空遮罩，
+                          表现为阴影完全不显示。
                         -->
-                        <Grid x:Name="AvatarHost" Grid.Row="0" Grid.RowSpan="2"
-                              Width="140" Height="140"
-                              HorizontalAlignment="Left" VerticalAlignment="Top"
-                              Margin="16,0,0,0"
-                              IsHitTestVisible="False">
-                            <Image x:Name="AvatarImage" Stretch="Fill" />
-                            <Border x:Name="AvatarFallback"
-                                    Background="{ThemeResource AccentFillColorDefaultBrush}"
-                                    Visibility="Collapsed">
-                                <TextBlock x:Name="AvatarInitial" FontSize="56" FontWeight="Bold"
-                                           Foreground="White"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
-                        </Grid>
+                        <Border x:Name="AvatarShadowHost"
+                                Grid.Row="0" Grid.RowSpan="2"
+                                Width="140" Height="140"
+                                HorizontalAlignment="Left" VerticalAlignment="Top"
+                                Margin="16,0,0,0"
+                                Background="Transparent"
+                                IsHitTestVisible="False">
+                            <Grid>
+                                <Image x:Name="AvatarImage" Stretch="Fill" />
+                                <Border x:Name="AvatarFallback"
+                                        Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                        Visibility="Collapsed">
+                                    <TextBlock x:Name="AvatarInitial" FontSize="56" FontWeight="Bold"
+                                               Foreground="White"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                            </Grid>
+                        </Border>
                     </Grid>
 
                     <!-- 信息卡片 -->

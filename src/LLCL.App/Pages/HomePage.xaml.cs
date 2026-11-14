@@ -5,6 +5,7 @@ using LLCL.Core.Minecraft;
 using LLCL.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 
 namespace LLCL.Pages;
 
@@ -21,7 +22,7 @@ public sealed partial class HomePage : Page
         AvatarImage.ImageOpened += (_, _) => ApplyAvatarShadow();
 
         // 布局变化时元素尺寸会变，遮罩需要同步重建
-        AvatarHost.SizeChanged += (_, _) => ApplyAvatarShadow();
+        AvatarShadowHost.SizeChanged += (_, _) => ApplyAvatarShadow();
 
         Loaded += (_, _) => Refresh();
 
@@ -33,37 +34,29 @@ public sealed partial class HomePage : Page
     }
 
     /// <summary>
-    /// 给头像挂上精确可控的投影。
+    /// 给头像挂上投影。
     /// <para>
-    /// 不用 ThemeShadow：它的模糊半径由元素与光源的距离决定，
-    /// 调大只会让阴影散成一圈、越贴不住轮廓。
-    /// 这里用 Composition 的 DropShadow，直接指定模糊半径与偏移量，
-    /// 阴影紧贴头像边缘并微微下沉。
+    /// Visual 上没有 Shadow 属性（只有 SpriteVisual 才有），
+    /// 用 SetElementChildVisual 塞进去又会被同层内容盖住，
+    /// 所以改用 XAML 的 ThemeShadow，靠 Shadow 属性加 Z 位移触发。
+    /// </para>
+    /// <para>
+    /// 需要显式声明接收面（卡片），否则阴影没有落点、看起来像没生效。
+    /// Z 取 8，ThemeShadow 的模糊半径约为其一半，贴近头像轮廓。
     /// </para>
     /// </summary>
     private void ApplyAvatarShadow()
     {
-        if (AvatarHost.ActualWidth <= 0 || AvatarHost.ActualHeight <= 0) return;
+        if (AvatarShadowHost.Shadow is not ThemeShadow shadow)
+        {
+            shadow = new ThemeShadow();
+            AvatarShadowHost.Shadow = shadow;
+        }
 
-        var compositor = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview
-            .GetElementVisual(AvatarHost).Compositor;
+        shadow.Receivers.Clear();
+        shadow.Receivers.Add(AvatarCard);
 
-        var shadow = compositor.CreateDropShadow();
-        shadow.Color = Microsoft.UI.Colors.Black;
-        shadow.BlurRadius = 10f;
-        shadow.Opacity = 0.45f;
-        shadow.Offset = new System.Numerics.Vector3(0, 3, 0);
-
-        // 用元素自身的 alpha 作为遮罩，阴影形状与头像轮廓一致
-        shadow.Mask = AvatarImage.GetAlphaMask();
-
-        var sprite = compositor.CreateSpriteVisual();
-        sprite.Shadow = shadow;
-        sprite.Size = new System.Numerics.Vector2(
-            (float)AvatarHost.ActualWidth, (float)AvatarHost.ActualHeight);
-
-        Microsoft.UI.Xaml.Hosting.ElementCompositionPreview
-            .SetElementChildVisual(AvatarHost, sprite);
+        AvatarShadowHost.Translation = new System.Numerics.Vector3(0, 0, 8);
     }
 
     /// <summary>账号新增、切换或删除后刷新首页显示。</summary>
@@ -405,6 +398,7 @@ public sealed partial class HomePage : Page
         MainWindow.Instance?.ShowVersionSettings(version);
     }
 }
+
 
 
 
