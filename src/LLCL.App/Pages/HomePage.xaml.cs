@@ -17,9 +17,10 @@ public sealed partial class HomePage : Page
     {
         InitializeComponent();
 
-        // ThemeShadow 需要元素带 Z 方向位移才会真正投影，
-        // 否则阴影半径为 0，看起来和没加一样。
-        AvatarHost.Translation = new System.Numerics.Vector3(0, 0, 32);
+        // ThemeShadow 的模糊半径与 Z 位移成正比：
+        // 位移过大会让阴影扩散成一圈、离开头像本体。
+        // 取一个较小的值，使阴影仅仅贴着边缘、略微下沉。
+        AvatarHost.Translation = new System.Numerics.Vector3(0, 0, 6);
 
         Loaded += (_, _) => Refresh();
 
