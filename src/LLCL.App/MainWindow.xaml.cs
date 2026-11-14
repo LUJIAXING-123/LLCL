@@ -52,6 +52,9 @@ public sealed partial class MainWindow : Window
             Navigate("home");
         };
 
+        // 允许把整合包文件拖进窗口安装，与 PCL 的行为一致
+        _EnableFileDrop();
+
         // 启动后台准备：EasyTier 内核检查 / 更新
         _ = AppServices.WarmupAsync(this);
 
@@ -182,6 +185,117 @@ public sealed partial class MainWindow : Window
     /// 这样下载进度、列表滚动位置等界面状态不会丢，也避免重复订阅全局事件造成泄漏。
     /// </summary>
     private readonly Dictionary<string, Page> _pageCache = new();
+
+    #region 拖入整合包安装
+
+    /// <summary>可拖入并作为整合包安装的扩展名。</summary>
+    private static readonly string[] ModpackExtensions = [".zip", ".mrpack", ".rar"];
+
+    /// <summary>
+    /// 开启整窗拖放。
+    /// 只接受文件，且在拖入时按扩展名给出视觉反馈，
+    /// 避免用户拖一个不相关的文件过来还以为会生效。
+    /// </summary>
+    private void _EnableFileDrop()
+    {
+        RootGrid.AllowDrop = true;
+
+        const string caption = "安装整合包";
+
+        RootGrid.DragOver += (_, e) =>
+        {
+            // DragOver 必须同步返回，这里只做开销最小的格式判断。
+            // 真正的扩展名过滤放在 Drop 里异步完成——
+            // 在这里同步等待 GetStorageItemsAsync 有死锁风险。
+            var hasFiles = e.DataView.Contains(
+                Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems);
+
+            e.AcceptedOperation = hasFiles
+                ? Windows.ApplicationModel.DataTransfer.DataPackageOperation.Copy
+                : Windows.ApplicationModel.DataTransfer.DataPackageOperation.None;
+
+            e.DragUIOverride.Caption = caption;
+            e.DragUIOverride.IsCaptionVisible = true;
+            e.DragUIOverride.IsContentVisible = true;
+            e.Handled = true;
+        };
+
+        RootGrid.Drop += async (_, e) =>
+        {
+            try
+            {
+                e.Handled = true;
+
+                var path = await _FirstModpackFileAsync(e.DataView);
+                if (path is null)
+                {
+                    await ShowMessageAsync("无法安装",
+                        "请拖入整合包文件（.zip / .mrpack / .rar）。");
+                    return;
+                }
+
+                await _InstallDroppedModpackAsync(path);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, "拖入整合包失败");
+            }
+        };
+    }
+
+    /// <summary>
+    /// 从拖放数据里取第一个可安装的文件。不是文件或扩展名不符时返回 null。
+    /// </summary>
+    private static async Task<string?> _FirstModpackFileAsync(
+        Windows.ApplicationModel.DataTransfer.DataPackageView view)
+    {
+        if (!view.Contains(Windows.ApplicationModel.DataTransfer.StandardDataFormats.StorageItems))
+            return null;
+
+        var items = await view.GetStorageItemsAsync();
+
+        foreach (var item in items)
+        {
+            if (item is not Windows.Storage.StorageFile file) continue;
+
+            var extension = Path.GetExtension(file.Name).ToLowerInvariant();
+            if (ModpackExtensions.Contains(extension))
+                return file.Path;
+        }
+
+        return null;
+    }
+
+    private async Task ShowMessageAsync(string title, string message)
+    {
+        var root = ContentFrame.XamlRoot;
+
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            CloseButtonText = "知道了",
+            XamlRoot = root
+        };
+
+        await dialog.ShowAsync();
+    }
+
+    /// <summary>
+    /// 把拖入的整合包交给下载页，走下载队列安装，
+    /// 同时切到下载页的任务列表让用户看到进度。
+    /// </summary>
+    private async Task _InstallDroppedModpackAsync(string path)
+    {
+        Logger.Info($"[拖入] 收到整合包：{path}");
+
+        Navigate("download");
+
+        if (_pageCache.TryGetValue("download", out var page) && page is DownloadPage download)
+            await download.StartModpackInstallAsync(path);
+    }
+
+    #endregion
 
     public void Navigate(string tag)
     {

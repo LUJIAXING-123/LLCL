@@ -1403,6 +1403,96 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 
+    #region 拖入整合包
+
+    /// <summary>
+    /// 安装从窗口拖入的整合包文件。
+    /// <para>
+    /// 由主窗口在收到拖放时调用。这里负责：
+    /// 读取元信息确定实例名 → 切到任务列表 → 交给下载队列执行，
+    /// 让用户能像在线安装一样看到进度。
+    /// </para>
+    /// </summary>
+    public async Task StartModpackInstallAsync(string archivePath)
+    {
+        ModpackInfo? info;
+        try
+        {
+            info = ModpackInstaller.Inspect(archivePath);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "读取整合包失败");
+            await ShowAsync("无法安装", "读取整合包失败：" + LLCL.Core.Link.FriendlyError.ToText(ex));
+            return;
+        }
+
+        if (info is null)
+        {
+            await ShowAsync("无法识别",
+                "这个压缩包不是可识别的整合包。\n\n" +
+                "目前支持 Modrinth（modrinth.index.json）、\n" +
+                "CurseForge（manifest.json）与 HMCL（modpack.json）格式。");
+            return;
+        }
+
+        // 实例名：优先用整合包自带名称，去掉文件名不允许的字符
+        var instanceId = new string((info.Name ?? "整合包")
+            .Where(c => !Path.GetInvalidFileNameChars().Contains(c))
+            .ToArray()).Trim();
+
+        if (string.IsNullOrWhiteSpace(instanceId)) instanceId = "Modpack";
+
+        // 重名时追加序号
+        var versionsRoot = Paths.VersionsDir;
+        var candidate = instanceId;
+        var suffix = 2;
+        while (Directory.Exists(Path.Combine(versionsRoot, candidate)))
+        {
+            candidate = $"{instanceId}-{suffix}";
+            suffix++;
+        }
+
+        instanceId = candidate;
+
+        // 切到任务列表，安装进度会由队列自动刷新到这里
+        Dispatch(() => SelectSection("tasks"));
+
+        var progress = MakeProgress();
+
+        try
+        {
+            await DownloadQueue.RunAsync(
+                $"安装整合包 {info.Name}", DownloadTaskKind.Resource,
+                async (_, token) =>
+                {
+                    await ModpackInstaller.InstallAsync(archivePath, instanceId, versionsRoot, progress, token);
+                },
+                default,
+                instanceId);
+
+            ProgressText.Text = $"✓ 整合包已安装为版本「{instanceId}」，可在首页启动";
+
+            // 触发版本列表刷新，让首页与左侧列表立即看到新实例
+            VersionManager.NotifyChanged();
+        }
+        catch (OperationCanceledException)
+        {
+            ProgressText.Text = "已取消整合包安装";
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "安装整合包失败");
+            ProgressText.Text = "安装失败：" + LLCL.Core.Link.FriendlyError.ToText(ex);
+        }
+        finally
+        {
+            RefreshTasks();
+        }
+    }
+
+    #endregion
+
     #region 安装 / 下载
 
     private void Install_Click(object sender, RoutedEventArgs e)
