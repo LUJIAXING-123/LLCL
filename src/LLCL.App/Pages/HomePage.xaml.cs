@@ -17,10 +17,11 @@ public sealed partial class HomePage : Page
     {
         InitializeComponent();
 
-        // ThemeShadow 的模糊半径与 Z 位移成正比：
-        // 位移过大会让阴影扩散成一圈、离开头像本体。
-        // 取一个较小的值，使阴影仅仅贴着边缘、略微下沉。
-        AvatarHost.Translation = new System.Numerics.Vector3(0, 0, 6);
+        // 阴影在图片真正解码完成后才能取到正确的 alpha 遮罩
+        AvatarImage.ImageOpened += (_, _) => ApplyAvatarShadow();
+
+        // 布局变化时元素尺寸会变，遮罩需要同步重建
+        AvatarHost.SizeChanged += (_, _) => ApplyAvatarShadow();
 
         Loaded += (_, _) => Refresh();
 
@@ -29,6 +30,40 @@ public sealed partial class HomePage : Page
 
         // 账号切换或新增后刷新显示
         AccountManager.Changed += OnAccountsChanged;
+    }
+
+    /// <summary>
+    /// 给头像挂上精确可控的投影。
+    /// <para>
+    /// 不用 ThemeShadow：它的模糊半径由元素与光源的距离决定，
+    /// 调大只会让阴影散成一圈、越贴不住轮廓。
+    /// 这里用 Composition 的 DropShadow，直接指定模糊半径与偏移量，
+    /// 阴影紧贴头像边缘并微微下沉。
+    /// </para>
+    /// </summary>
+    private void ApplyAvatarShadow()
+    {
+        if (AvatarHost.ActualWidth <= 0 || AvatarHost.ActualHeight <= 0) return;
+
+        var compositor = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview
+            .GetElementVisual(AvatarHost).Compositor;
+
+        var shadow = compositor.CreateDropShadow();
+        shadow.Color = Microsoft.UI.Colors.Black;
+        shadow.BlurRadius = 10f;
+        shadow.Opacity = 0.45f;
+        shadow.Offset = new System.Numerics.Vector3(0, 3, 0);
+
+        // 用元素自身的 alpha 作为遮罩，阴影形状与头像轮廓一致
+        shadow.Mask = AvatarImage.GetAlphaMask();
+
+        var sprite = compositor.CreateSpriteVisual();
+        sprite.Shadow = shadow;
+        sprite.Size = new System.Numerics.Vector2(
+            (float)AvatarHost.ActualWidth, (float)AvatarHost.ActualHeight);
+
+        Microsoft.UI.Xaml.Hosting.ElementCompositionPreview
+            .SetElementChildVisual(AvatarHost, sprite);
     }
 
     /// <summary>账号新增、切换或删除后刷新首页显示。</summary>
@@ -184,6 +219,9 @@ public sealed partial class HomePage : Page
             AvatarImage.Source = head;
             AvatarImage.Visibility = Visibility.Visible;
             AvatarFallback.Visibility = Visibility.Collapsed;
+
+            // 图片换新后必须重做遮罩，否则阴影仍按旧内容（或空内容）计算
+            ApplyAvatarShadow();
         });
     }
 

@@ -110,15 +110,17 @@
                             </Grid>
                         </Border>
 
-                        <!-- 头像：无边框，跨两行从顶部开始绘制 -->
+                        <!--
+                          头像：无边框，跨两行从顶部开始绘制。
+                          阴影不使用 ThemeShadow（其半径由光源距离决定，无法精确控制，
+                          表现为阴影散开、贴不住轮廓），
+                          改为在代码里挂 Composition 的 DropShadow，见 ApplyAvatarShadow。
+                        -->
                         <Grid x:Name="AvatarHost" Grid.Row="0" Grid.RowSpan="2"
                               Width="140" Height="140"
                               HorizontalAlignment="Left" VerticalAlignment="Top"
                               Margin="16,0,0,0"
                               IsHitTestVisible="False">
-                            <Grid.Shadow>
-                                <ThemeShadow />
-                            </Grid.Shadow>
                             <Image x:Name="AvatarImage" Stretch="Fill" />
                             <Border x:Name="AvatarFallback"
                                     Background="{ThemeResource AccentFillColorDefaultBrush}"
