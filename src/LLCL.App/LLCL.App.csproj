@@ -80,6 +80,11 @@
         <!-- 关于页使用原图，保留细节 -->
         <EmbeddedResource Include="Assets\llcl-logo.png" LogicalName="LLCL.Assets.llcl-logo.png" />
         <Content Include="Assets\llcl-logo.png" CopyToOutputDirectory="PreserveNewest" Condition="Exists('Assets\llcl-logo.png')" />
+
+        <!-- 收款码嵌入程序集，避免绿色版或安装包丢失图片 -->
+        <EmbeddedResource Include="Assets\donate-qrcode.png"
+                          LogicalName="LLCL.Assets.donate-qrcode.png"
+                          Condition="Exists('Assets\donate-qrcode.png')" />
     </ItemGroup>
 
     <ItemGroup>

@@ -27,40 +27,143 @@ public sealed partial class AboutPage : Page
         PathLine.Text = $"游戏目录：{Paths.MinecraftDir}\n数据目录：{Paths.DataRoot}";
 
         SetLogo(LoadLogoBytes());
-        LoadDonateQr();
 
         ThanksLine.Text = "特别感谢 冷刃风影 的赞助支持。";
     }
 
-    /// <summary>加载项目根目录的微信收款码，缺失时不显示该区域。</summary>
-    private void LoadDonateQr()
+    /// <summary>缓存的收款码字节，点击按钮时才创建位图。</summary>
+    private byte[]? _donateQrBytes;
+
+    /// <summary>
+    /// 查找微信收款码。依次尝试：
+    /// 1) 内嵌资源
+    /// 2) exe 同级目录与 Assets 子目录
+    /// 3) 数据目录
+    /// </summary>
+    private byte[]? LoadDonateQrBytes()
     {
+        if (_donateQrBytes is not null) return _donateQrBytes;
+
         const string fileName = "donate-qrcode.png";
 
+        // 1) 内嵌资源
+        try
+        {
+            using var stream = Assembly.GetExecutingAssembly()
+                .GetManifestResourceStream("LLCL.Assets.donate-qrcode.png");
+            if (stream is not null)
+            {
+                using var ms = new MemoryStream();
+                stream.CopyTo(ms);
+                _donateQrBytes = ms.ToArray();
+                return _donateQrBytes;
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"读取内嵌收款码失败: {ex.Message}");
+        }
+
+        // 2) 文件系统
         foreach (var dir in new[] { Paths.LauncherDir, AppContext.BaseDirectory, Paths.DataRoot })
         {
-            try
+            foreach (var candidate in new[]
+                     {
+                         Path.Combine(dir, fileName),
+                         Path.Combine(dir, "Assets", fileName)
+                     })
             {
-                var path = Path.Combine(dir, fileName);
-                if (!File.Exists(path)) continue;
+                try
+                {
+                    if (!File.Exists(candidate)) continue;
 
-                var bytes = File.ReadAllBytes(path);
-                if (bytes.Length == 0) continue;
+                    var bytes = File.ReadAllBytes(candidate);
+                    if (bytes.Length == 0) continue;
 
-                var bitmap = new BitmapImage();
-                using var stream = new MemoryStream(bytes).AsRandomAccessStream();
-                bitmap.SetSource(stream);
-                DonateQrImage.Source = bitmap;
-                return;
-            }
-            catch (Exception ex)
-            {
-                Logger.Warn($"读取收款码失败: {ex.Message}");
+                    Logger.Info($"关于页收款码：使用文件 {candidate}");
+                    _donateQrBytes = bytes;
+                    return _donateQrBytes;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warn($"读取收款码失败 {candidate}: {ex.Message}");
+                }
             }
         }
 
-        Logger.Warn($"未找到收款码 {fileName}，关于页不显示赞助图片");
-        DonateQrImage.Visibility = Visibility.Collapsed;
+        Logger.Warn($"未找到收款码 {fileName}");
+        return null;
+    }
+
+    /// <summary>弹出微信收款码。</summary>
+    private async void Donate_Click(object sender, RoutedEventArgs e)
+    {
+        var bytes = LoadDonateQrBytes();
+
+        if (bytes is null)
+        {
+            await ShowAsync("收款码缺失",
+                "没有找到收款码图片。如果你仍想支持开发，可以通过 GitHub 仓库联系作者。");
+            return;
+        }
+
+        var image = new Image
+        {
+            Width = 240,
+            Height = 240,
+            Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform
+        };
+
+        try
+        {
+            var bitmap = new BitmapImage();
+            using var stream = new MemoryStream(bytes).AsRandomAccessStream();
+            bitmap.SetSource(stream);
+            image.Source = bitmap;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"收款码解码失败: {ex.Message}");
+            await ShowAsync("收款码无法显示", "图片解码失败，请通过 GitHub 仓库联系作者。");
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            Title = "微信扫码支持开发",
+            Content = new StackPanel
+            {
+                Spacing = 8,
+                Children =
+                {
+                    image,
+                    new TextBlock
+                    {
+                        Text = "赞助完全自愿，不影响任何功能的使用。",
+                        FontSize = 12,
+                        TextWrapping = TextWrapping.Wrap,
+                        HorizontalAlignment = HorizontalAlignment.Center
+                    }
+                }
+            },
+            CloseButtonText = "关闭",
+            XamlRoot = XamlRoot
+        };
+
+        await dialog.ShowAsync();
+    }
+
+    private async Task ShowAsync(string title, string message)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            CloseButtonText = "知道了",
+            XamlRoot = XamlRoot
+        };
+
+        await dialog.ShowAsync();
     }
 
     /// <summary>打开项目仓库。</summary>

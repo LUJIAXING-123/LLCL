@@ -94,11 +94,7 @@ public sealed partial class DownloadPage : Page
         else if (McVersionCombo.Items.Count > 0)
             McVersionCombo.SelectedIndex = 0;
 
-        ResourceVersionCombo.Items.Clear();
-        ResourceVersionCombo.Items.Add("全部版本");
-        foreach (var version in _manifest.Versions.Where(v => v.Type == "release").Take(60))
-            ResourceVersionCombo.Items.Add(version.Id);
-        ResourceVersionCombo.SelectedIndex = 0;
+        PopulateResourceVersions();
 
         // 游戏版本就绪后，若当前就在加载器页，立即查询并自动选中加载器版本
         if (_section == "loader") _ = LoadLoaderVersionsAsync();
@@ -109,6 +105,51 @@ public sealed partial class DownloadPage : Page
 
         // 后台预热社区资源首页，切到模组/整合包等分类时立即出结果
         PrefetchResources();
+    }
+
+    /// <summary>
+    /// 按当前筛选条件重建资源页的游戏版本下拉框。
+    /// 与原版游戏页保持一致：正式版 / 快照 / 全部。
+    /// </summary>
+    private void PopulateResourceVersions()
+    {
+        if (_manifest is null) return;
+
+        var current = ResourceVersionCombo.SelectedItem as string;
+
+        ResourceVersionCombo.Items.Clear();
+        ResourceVersionCombo.Items.Add("全部版本");
+
+        var types = ResRadioSnapshot?.IsChecked == true
+            ? new[] { "snapshot", "old_beta", "old_alpha" }
+            : ResRadioAll?.IsChecked == true
+                ? null
+                : new[] { "release" };
+
+        var versions = types is null
+            ? _manifest.Versions
+            : _manifest.Versions.Where(v => types.Contains(v.Type));
+
+        foreach (var version in versions.Take(120))
+            ResourceVersionCombo.Items.Add(version.Id);
+
+        if (current is not null && ResourceVersionCombo.Items.Contains(current))
+            ResourceVersionCombo.SelectedItem = current;
+        else
+            ResourceVersionCombo.SelectedIndex = 0;
+    }
+
+    private void ResourceFilter_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_loaded) return;
+        PopulateResourceVersions();
+    }
+
+    private void ResourceVersion_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loaded) return;
+        if (_section is "mod" or "modpack" or "resourcepack" or "shader")
+            _ = SearchResourcesAsync();
     }
 
     /// <summary>
@@ -828,14 +869,9 @@ public sealed partial class DownloadPage : Page
 
         try
         {
-            // 目标版本沿用左侧列表中选中的游戏版本
-            var versionId = (VersionList.SelectedItem as VersionItem)?.Id;
-
-            if (string.IsNullOrWhiteSpace(versionId))
-            {
-                DetailStatus.Text = "请先在「原版游戏」或「模组加载器」里选中一个游戏版本";
-                return;
-            }
+            // 与列表页下载一致：弹出「安装到哪个版本」让用户选择
+            var versionId = await PickTargetVersionAsync();
+            if (versionId is null) return;
 
             var type = CurrentResourceType();
             await ResourceService.DownloadToVersionAsync(_detailFile, versionId, type);
@@ -1189,19 +1225,18 @@ public sealed partial class DownloadPage : Page
         }
     }
 
-    private async Task InstallResourceAsync()
+    /// <summary>
+    /// 弹出「安装到哪个版本」选择框，返回用户选中的已安装版本。
+    /// 与原版下载流程保持一致，避免依赖左侧列表的选中项
+    /// （那个列表属于「原版游戏」面板，在模组分类下是空的）。
+    /// </summary>
+    private async Task<string?> PickTargetVersionAsync()
     {
-        if (_selectedResource is null)
-        {
-            await ShowAsync("未选择资源", "请先在列表中搜索并选择一个资源。");
-            return;
-        }
-
         var installed = VersionLoader.GetInstalledVersions();
         if (installed.Count == 0)
         {
-            await ShowAsync("没有可用版本", "请先在“原版游戏”中安装一个版本。");
-            return;
+            await ShowAsync("没有可用版本", "请先在「原版游戏」中安装一个版本。");
+            return null;
         }
 
         var combo = new ComboBox
@@ -1210,6 +1245,7 @@ public sealed partial class DownloadPage : Page
             SelectedIndex = 0,
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
+
         var dialog = new ContentDialog
         {
             Title = "安装到哪个版本？",
@@ -1220,8 +1256,20 @@ public sealed partial class DownloadPage : Page
             XamlRoot = XamlRoot
         };
 
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
-        if (combo.SelectedItem is not string targetVersion) return;
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return null;
+        return combo.SelectedItem as string;
+    }
+
+    private async Task InstallResourceAsync()
+    {
+        if (_selectedResource is null)
+        {
+            await ShowAsync("未选择资源", "请先在列表中搜索并选择一个资源。");
+            return;
+        }
+
+        var targetVersion = await PickTargetVersionAsync();
+        if (targetVersion is null) return;
 
         BeginBusy();
         var progress = MakeProgress();
@@ -1547,6 +1595,7 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
 
 
 

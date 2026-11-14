@@ -56,27 +56,17 @@
                 </Grid>
             </Border>
 
-            <!-- 支持开发：直接展示收款码，不额外弹窗 -->
+            <!-- 支持开发：点击按钮弹出收款码 -->
             <Border Style="{StaticResource CardStyle}">
                 <StackPanel Spacing="8">
                     <TextBlock Text="支持开发" FontSize="16" FontWeight="SemiBold" />
                     <TextBlock FontSize="13" TextWrapping="Wrap"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                               Text="LLCL 完全免费且开源，所有功能都不收费。如果它帮到了你，欢迎扫码支持后续开发，金额随意。" />
-                    <Grid ColumnSpacing="16">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Image x:Name="DonateQrImage" Width="140" Height="140" Stretch="Uniform" />
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="6">
-                            <TextBlock Text="微信扫码赞助" FontSize="13" FontWeight="SemiBold" />
-                            <TextBlock FontSize="12" TextWrapping="Wrap"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       Text="赞助完全自愿，不影响任何功能的使用。" />
-                            <HyperlinkButton Content="GitHub 仓库" Click="Repo_Click" Padding="0" />
-                        </StackPanel>
-                    </Grid>
+                               Text="LLCL 完全免费且开源，所有功能都不收费。如果它帮到了你，欢迎支持后续开发，金额随意。" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="微信赞助" Click="Donate_Click" />
+                        <HyperlinkButton Content="GitHub 仓库" Click="Repo_Click" Padding="4" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </StackPanel>
