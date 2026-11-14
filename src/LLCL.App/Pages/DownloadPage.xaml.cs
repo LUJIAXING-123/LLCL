@@ -94,7 +94,7 @@ public sealed partial class DownloadPage : Page
         else if (McVersionCombo.Items.Count > 0)
             McVersionCombo.SelectedIndex = 0;
 
-        PopulateResourceVersions();
+        PopulateDetailGameVersions();
 
         // 游戏版本就绪后，若当前就在加载器页，立即查询并自动选中加载器版本
         if (_section == "loader") _ = LoadLoaderVersionsAsync();
@@ -108,48 +108,31 @@ public sealed partial class DownloadPage : Page
     }
 
     /// <summary>
-    /// 按当前筛选条件重建资源页的游戏版本下拉框。
-    /// 与原版游戏页保持一致：正式版 / 快照 / 全部。
+    /// 填充二级页面的游戏版本下拉框。
+    /// 数据来自版本清单，只列出正式版，避免列表过长。
     /// </summary>
-    private void PopulateResourceVersions()
+    private void PopulateDetailGameVersions()
     {
         if (_manifest is null) return;
 
-        var current = ResourceVersionCombo.SelectedItem as string;
+        DetailGameVersionCombo.Items.Clear();
+        DetailGameVersionCombo.Items.Add("全部版本");
 
-        ResourceVersionCombo.Items.Clear();
-        ResourceVersionCombo.Items.Add("全部版本");
+        foreach (var version in _manifest.Versions.Where(v => v.Type == "release").Take(120))
+            DetailGameVersionCombo.Items.Add(version.Id);
 
-        var types = ResRadioSnapshot?.IsChecked == true
-            ? new[] { "snapshot", "old_beta", "old_alpha" }
-            : ResRadioAll?.IsChecked == true
-                ? null
-                : new[] { "release" };
-
-        var versions = types is null
-            ? _manifest.Versions
-            : _manifest.Versions.Where(v => types.Contains(v.Type));
-
-        foreach (var version in versions.Take(120))
-            ResourceVersionCombo.Items.Add(version.Id);
-
-        if (current is not null && ResourceVersionCombo.Items.Contains(current))
-            ResourceVersionCombo.SelectedItem = current;
-        else
-            ResourceVersionCombo.SelectedIndex = 0;
-    }
-
-    private void ResourceFilter_Changed(object sender, RoutedEventArgs e)
-    {
-        if (!_loaded) return;
-        PopulateResourceVersions();
+        DetailGameVersionCombo.SelectedIndex = 0;
     }
 
     private void ResourceVersion_Changed(object sender, SelectionChangedEventArgs e)
     {
-        if (!_loaded) return;
-        if (_section is "mod" or "modpack" or "resourcepack" or "shader")
-            _ = SearchResourcesAsync();
+        // 版本筛选已移到二级页面，这里保留空实现以免事件签名失配
+    }
+
+    /// <summary>二级页面的游戏版本筛选。</summary>
+    private void DetailGameVersion_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (PanelResourceDetail.Visibility == Visibility.Visible) _ = LoadDetailFilesAsync();
     }
 
     /// <summary>
@@ -182,7 +165,9 @@ public sealed partial class DownloadPage : Page
                     var cf = await ResourceService.SearchCurseForgeAsync(string.Empty, type,
                         limit: ResourcePageSize, offset: 0);
 
-                    var merged = hits.Concat(cf).ToList();
+                    // 必须与 FetchResourceBatchAsync 使用同一套交叉合并，
+                    // 否则缓存命中时两个源会各自成段，看起来像一个源。
+                    var merged = MergeAlternating(hits, cf);
 
                     _resourceCache[type] = new ResourceCacheEntry
                     {
@@ -665,6 +650,9 @@ public sealed partial class DownloadPage : Page
             DetailLoaderCombo.SelectedIndex = 0;
         }
 
+        // 游戏版本筛选：每次打开都重建并归位到「全部版本」
+        PopulateDetailGameVersions();
+
         PanelResource.Visibility = Visibility.Collapsed;
         PanelResourceDetail.Visibility = Visibility.Visible;
         InstallButton.Visibility = Visibility.Collapsed;
@@ -722,11 +710,15 @@ public sealed partial class DownloadPage : Page
             var loader = DetailLoaderCombo.SelectedItem as string;
             if (loader is "不限") loader = null;
 
+            // 二级页面的游戏版本筛选
+            var gameVersion = DetailGameVersionCombo.SelectedItem as string;
+            if (gameVersion is "全部版本") gameVersion = null;
+
             var isCurseForge = _detailCard.Source == "CurseForge";
 
             _detailFiles = isCurseForge
-                ? await ResourceService.GetCurseForgeFilesAsync(_detailCard.Id, null, loader)
-                : await ResourceService.GetModrinthFilesAsync(_detailCard.Id, null, loader);
+                ? await ResourceService.GetCurseForgeFilesAsync(_detailCard.Id, gameVersion, loader)
+                : await ResourceService.GetModrinthFilesAsync(_detailCard.Id, gameVersion, loader);
 
             // 按游戏版本分组：同一版本下的所有资源版本收进同一个折叠项
             var groups = new List<ResourceVersionGroup>();
@@ -874,7 +866,6 @@ public sealed partial class DownloadPage : Page
             if (versionId is null) return;
 
             var type = CurrentResourceType();
-            await ResourceService.DownloadToVersionAsync(_detailFile, versionId, type);
 
             // 一并下载用户勾选的前置
             var checkedDeps = (DetailDependencyList.ItemsSource as IEnumerable<DependencyItem> ?? [])
@@ -887,15 +878,30 @@ public sealed partial class DownloadPage : Page
             if (loader is "不限") loader = null;
             var isCurseForge = _detailCard.Source == "CurseForge";
 
-            foreach (var dep in checkedDeps)
-            {
-                var files = isCurseForge
-                    ? await ResourceService.GetCurseForgeFilesAsync(dep.ProjectId, gameVersion, loader)
-                    : await ResourceService.GetModrinthFilesAsync(dep.ProjectId, gameVersion, loader);
+            var mainFile = _detailFile;
+            var progress = MakeProgress();
 
-                var pick = files.FirstOrDefault();
-                if (pick is not null) await ResourceService.DownloadToVersionAsync(pick, versionId, type);
-            }
+            // 必须走下载队列，否则不会出现在「下载任务」列表里，
+            // 也无法暂停、取消或看到进度。
+            await DownloadQueue.RunAsync(
+                $"下载 {mainFile.FileName}", DownloadTaskKind.Resource,
+                async (_, token) =>
+                {
+                    await ResourceService.DownloadToVersionAsync(mainFile, versionId, type, progress, token);
+
+                    foreach (var dep in checkedDeps)
+                    {
+                        var files = isCurseForge
+                            ? await ResourceService.GetCurseForgeFilesAsync(dep.ProjectId, gameVersion, loader, token)
+                            : await ResourceService.GetModrinthFilesAsync(dep.ProjectId, gameVersion, loader, token);
+
+                        var pick = files.FirstOrDefault();
+                        if (pick is not null)
+                            await ResourceService.DownloadToVersionAsync(pick, versionId, type, progress, token);
+                    }
+                },
+                default,
+                versionId);
 
             DetailStatus.Text = checkedDeps.Count > 0
                 ? $"已下载到版本「{versionId}」，含 {checkedDeps.Count} 个前置"
@@ -941,13 +947,12 @@ public sealed partial class DownloadPage : Page
     private async Task SearchResourcesAsync()
     {
         if (_busy || !_loaded) return;
-        if (ResourceSearchBox is null || ResourceList is null ||
-            ResourceVersionCombo is null) return;
+        if (ResourceSearchBox is null || ResourceList is null) return;
 
         var query = ResourceSearchBox.Text?.Trim() ?? string.Empty;
 
-        var gameVersion = ResourceVersionCombo.SelectedItem as string;
-        if (gameVersion is "全部版本") gameVersion = null;
+        // 列表页不做版本筛选，统一在二级页面里挑具体的游戏版本
+        string? gameVersion = null;
 
         _resourceQuery = query;
         _resourceGameVersion = gameVersion;
@@ -1103,24 +1108,7 @@ public sealed partial class DownloadPage : Page
 
         // 两个源的下载量量级差异很大，直接混排会让一边整体沉到后面。
         // 改为各自按下载量排序，再按名次交替合并，这样任何一页都能看到两个源。
-        modrinth.Sort((a, b) => b.Downloads.CompareTo(a.Downloads));
-        curseforge.Sort((a, b) => b.Downloads.CompareTo(a.Downloads));
-
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var merged = new List<ResourceHit>(modrinth.Count + curseforge.Count);
-
-        for (var i = 0; i < Math.Max(modrinth.Count, curseforge.Count); i++)
-        {
-            if (i < modrinth.Count) Add(modrinth[i]);
-            if (i < curseforge.Count) Add(curseforge[i]);
-        }
-
-        void Add(ResourceHit hit)
-        {
-            // 同一项目可能在两个源都出现，按名称 + 作者去重
-            if (!seen.Add($"{hit.Name}|{hit.Author}")) return;
-            merged.Add(hit);
-        }
+        var merged = MergeAlternating(modrinth, curseforge);
 
         if (sourceIndex == 0)
         {
@@ -1139,6 +1127,37 @@ public sealed partial class DownloadPage : Page
         else
         {
             _sourceNote = null;
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// 把两个源的结果按名次交替合并。
+    /// <para>
+    /// 两个源的下载量量级差异很大，直接按下载量混排会让一边整体沉到后面，
+    /// 用户会以为只有一个源。各自排序后交替插入，可保证任意一页都同时出现两个源。
+    /// 同名同作者视为同一项目，只保留先出现的一条。
+    /// </para>
+    /// </summary>
+    private static List<ResourceHit> MergeAlternating(List<ResourceHit> modrinth, List<ResourceHit> curseforge)
+    {
+        modrinth.Sort((a, b) => b.Downloads.CompareTo(a.Downloads));
+        curseforge.Sort((a, b) => b.Downloads.CompareTo(a.Downloads));
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var merged = new List<ResourceHit>(modrinth.Count + curseforge.Count);
+
+        void Add(ResourceHit hit)
+        {
+            if (!seen.Add($"{hit.Name}|{hit.Author}")) return;
+            merged.Add(hit);
+        }
+
+        for (var i = 0; i < Math.Max(modrinth.Count, curseforge.Count); i++)
+        {
+            if (i < modrinth.Count) Add(modrinth[i]);
+            if (i < curseforge.Count) Add(curseforge[i]);
         }
 
         return merged;
@@ -1166,12 +1185,10 @@ public sealed partial class DownloadPage : Page
     {
         if (_selectedResource is null || _resourceFiles.Count > 0) return;
 
-        var gameVersion = ResourceVersionCombo.SelectedItem as string;
-        if (gameVersion is "全部版本") gameVersion = null;
-
+        // 列表页下载不限定游戏版本，交由服务端返回默认排序的文件
         _resourceFiles = _selectedResource.Source == ResourceSource.Modrinth
-            ? await ResourceService.GetModrinthFilesAsync(_selectedResource.Id, gameVersion, null)
-            : await ResourceService.GetCurseForgeFilesAsync(_selectedResource.Id, gameVersion);
+            ? await ResourceService.GetModrinthFilesAsync(_selectedResource.Id, null, null)
+            : await ResourceService.GetCurseForgeFilesAsync(_selectedResource.Id, null);
     }
 
     #endregion
@@ -1595,6 +1612,7 @@ public sealed partial class DownloadPage : Page
 
     #endregion
 }
+
 
 
 
