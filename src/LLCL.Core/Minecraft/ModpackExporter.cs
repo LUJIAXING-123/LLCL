@@ -102,9 +102,10 @@ public static class ModpackExporter
 
         progress?.Report(($"正在计算校验值（{files.Count} 个文件）", 0.15));
 
-        // 生成 modrinth.index.json 的 files 数组
-        var fileArray = new JsonArray();
-        var bundled = new List<(string FullPath, string Relative)>();
+        // 先算好全部 SHA1，用于向 Modrinth 反查来源。
+        // 查到来源就能只写下载地址，对方安装时自行下载，包体积可以小一个数量级；
+        // 查不到才把文件打进 overrides 兜底。
+        var hashes = new List<(string FullPath, string Relative, string Sha1, long Size)>(files.Count);
 
         var index = 0;
         foreach (var (fullPath, relative) in files)
@@ -113,20 +114,30 @@ public static class ModpackExporter
 
             index++;
             if (files.Count > 0)
-                progress?.Report(($"正在计算校验值 {index}/{files.Count}", 0.15 + 0.5 * index / files.Count));
+                progress?.Report(($"正在计算校验值 {index}/{files.Count}",
+                    0.15 + 0.25 * index / files.Count));
 
-            var info = new FileInfo(fullPath);
+            var sha1 = await HashAsync(fullPath, SHA1.Create, ct).ConfigureAwait(false);
+            hashes.Add((fullPath, relative, sha1, new FileInfo(fullPath).Length));
+        }
 
-            if (options.BundleFiles)
+        // 批量查来源，失败不影响导出（全部退化为打包）
+        progress?.Report(("正在查询文件来源", 0.42));
+        var sources = await LookupModrinthSourcesAsync(hashes.Select(h => h.Sha1).ToList(), ct)
+            .ConfigureAwait(false);
+
+        Logger.Info($"[导出] 反查来源命中 {sources.Count} / {hashes.Count}");
+
+        var fileArray = new JsonArray();
+        var bundled = new List<(string FullPath, string Relative)>();
+
+        foreach (var (fullPath, relative, sha1, size) in hashes)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            // 有下载来源且未强制打包 → 只写索引，文件不进包
+            if (!options.BundleFiles && sources.TryGetValue(sha1, out var url))
             {
-                // 原样打包：文件放进 overrides，不需要下载地址
-                bundled.Add((fullPath, relative));
-            }
-            else
-            {
-                // 只记录校验值，要求对方自己下载。
-                // 没有来源地址时无法还原，仍放进 overrides 兜底。
-                var sha1 = await HashAsync(fullPath, SHA1.Create, ct).ConfigureAwait(false);
                 var sha512 = await HashAsync(fullPath, SHA512.Create, ct).ConfigureAwait(false);
 
                 fileArray.Add(new JsonObject
@@ -137,13 +148,18 @@ public static class ModpackExporter
                         ["sha1"] = sha1,
                         ["sha512"] = sha512
                     },
-                    ["downloads"] = new JsonArray(),
-                    ["fileSize"] = info.Length
+                    ["downloads"] = new JsonArray(url),
+                    ["fileSize"] = size
                 });
-
+            }
+            else
+            {
+                // 没有来源或用户要求打包 → 放进 overrides
                 bundled.Add((fullPath, relative));
             }
         }
+
+        progress?.Report(("正在组装索引", 0.55));
 
         // 组装 index
         var dependencies = new JsonObject { ["minecraft"] = minecraftVersion };
@@ -243,6 +259,77 @@ public static class ModpackExporter
 
         var hash = await algorithm.ComputeHashAsync(stream, ct).ConfigureAwait(false);
         return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// 用 SHA1 批量向 Modrinth 反查文件来源，返回「SHA1 → 下载地址」。
+    /// <para>
+    /// 这是减小整合包体积的关键：命中后只需写下载地址，
+    /// 对方安装时从官方 CDN 拉取，不必把文件塞进压缩包。
+    /// 查询失败或未命中都不影响导出，对应文件会退化为打包。
+    /// </para>
+    /// </summary>
+    private static async Task<Dictionary<string, string>> LookupModrinthSourcesAsync(
+        List<string> sha1List, CancellationToken ct)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (sha1List.Count == 0) return result;
+
+        try
+        {
+            // Modrinth 的批量接口单次上限较宽，这里按 100 个一批
+            foreach (var batch in sha1List.Chunk(100))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var payload = new JsonObject
+                {
+                    ["hashes"] = new JsonArray(batch.Select(h => (JsonNode)h).ToArray()),
+                    ["algorithm"] = "sha1"
+                };
+
+                using var content = new StringContent(payload.ToJsonString(),
+                    Encoding.UTF8, "application/json");
+
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Post, "https://api.modrinth.com/v2/version_files")
+                {
+                    Content = content
+                };
+                request.Headers.Add("User-Agent", "LLCL/0.1.3 (modpack export)");
+
+                using var response = await Net.Http.Client
+                    .SendAsync(request, ct).ConfigureAwait(false);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    Logger.Warn($"[导出] 来源查询失败 HTTP {(int)response.StatusCode}");
+                    break;
+                }
+
+                var body = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                if (JsonNode.Parse(body) is not JsonObject map) continue;
+
+                foreach (var (hash, node) in map)
+                {
+                    if (node is not JsonObject version) continue;
+
+                    var url = (version["files"] as JsonArray)?
+                        .OfType<JsonObject>()
+                        .Select(f => f["url"]?.GetValue<string>())
+                        .FirstOrDefault(u => !string.IsNullOrWhiteSpace(u));
+
+                    if (!string.IsNullOrWhiteSpace(url)) result[hash] = url;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"[导出] 反查来源时出错（将改为打包文件）: {ex.Message}");
+        }
+
+        return result;
     }
 
     /// <summary>
