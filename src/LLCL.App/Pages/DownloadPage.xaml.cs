@@ -165,9 +165,9 @@ public sealed partial class DownloadPage : Page
                     var cf = await ResourceService.SearchCurseForgeAsync(string.Empty, type,
                         limit: ResourcePageSize, offset: 0);
 
-                    // 必须与 FetchResourceBatchAsync 使用同一套交叉合并，
-                    // 否则缓存命中时两个源会各自成段，看起来像一个源。
-                    var merged = MergeAlternating(hits, cf);
+                    // 必须与 FetchResourceBatchAsync 使用同一套合并算法，
+                    // 否则缓存命中时排序规则会与实时查询不一致。
+                    var merged = MergeByScore(hits, cf, type, null);
 
                     _resourceCache[type] = new ResourceCacheEntry
                     {
@@ -1106,9 +1106,8 @@ public sealed partial class DownloadPage : Page
             }
         }
 
-        // 两个源的下载量量级差异很大，直接混排会让一边整体沉到后面。
-        // 改为各自按下载量排序，再按名次交替合并，这样任何一页都能看到两个源。
-        var merged = MergeAlternating(modrinth, curseforge);
+        // 加权评分后统一排序，见 MergeByScore 的说明
+        var merged = MergeByScore(modrinth, curseforge, type, query);
 
         if (sourceIndex == 0)
         {
@@ -1133,34 +1132,77 @@ public sealed partial class DownloadPage : Page
     }
 
     /// <summary>
-    /// 把两个源的结果按名次交替合并。
+    /// 合并两个源的结果，算法参照 PCL-CE 的 CompProjectsGet。
     /// <para>
-    /// 两个源的下载量量级差异很大，直接按下载量混排会让一边整体沉到后面，
-    /// 用户会以为只有一个源。各自排序后交替插入，可保证任意一页都同时出现两个源。
-    /// 同名同作者视为同一项目，只保留先出现的一条。
+    /// 不采用「各自排序后交替插入」：那种做法会让排名的含义失真，
+    /// 用户看到的第一名可能下载量远低于第二页。
+    /// </para>
+    /// <para>
+    /// 这里改为加权评分后统一排序：
+    /// 1. 各源下载量乘以一个按资源类型定的权重，抵消两站量级差异；
+    /// 2. 取 log10 压缩数量级，否则下载量大的源会完全压制另一个；
+    /// 3. 除以 9 归一到 0~1；
+    /// 4. 同项目只保留先出现的（Modrinth 优先）。
     /// </para>
     /// </summary>
-    private static List<ResourceHit> MergeAlternating(List<ResourceHit> modrinth, List<ResourceHit> curseforge)
+    private static List<ResourceHit> MergeByScore(List<ResourceHit> modrinth,
+        List<ResourceHit> curseforge, ResourceType type, string? query)
     {
-        modrinth.Sort((a, b) => b.Downloads.CompareTo(a.Downloads));
-        curseforge.Sort((a, b) => b.Downloads.CompareTo(a.Downloads));
-
+        // 去重：同一项目在两个源都上架时只留 Modrinth 那条
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var merged = new List<ResourceHit>(modrinth.Count + curseforge.Count);
+        var all = new List<ResourceHit>(modrinth.Count + curseforge.Count);
 
-        void Add(ResourceHit hit)
+        foreach (var hit in modrinth.Concat(curseforge))
         {
-            if (!seen.Add($"{hit.Name}|{hit.Author}")) return;
-            merged.Add(hit);
+            if (seen.Add($"{hit.Name}|{hit.Author}")) all.Add(hit);
         }
 
-        for (var i = 0; i < Math.Max(modrinth.Count, curseforge.Count); i++)
+        // 各源的权重：让两个站在同一量级上比较
+        static double Weight(ResourceSource source, ResourceType type) => type switch
         {
-            if (i < modrinth.Count) Add(modrinth[i]);
-            if (i < curseforge.Count) Add(curseforge[i]);
+            ResourceType.Mod or ResourceType.Modpack => source == ResourceSource.CurseForge ? 1 : 7,
+            ResourceType.ResourcePack or ResourceType.Shader => source == ResourceSource.CurseForge ? 1 : 5,
+            _ => 1
+        };
+
+        var hasQuery = !string.IsNullOrWhiteSpace(query);
+        var needle = query?.Trim() ?? string.Empty;
+
+        var scored = new List<(ResourceHit Hit, double Score)>(all.Count);
+
+        foreach (var hit in all)
+        {
+            var weighted = Math.Max(hit.Downloads, 1) * Weight(hit.Source, type);
+            var score = Math.Log10(weighted) / 9;
+
+            // 有关键词时叠加匹配度，让精确命中的项目排到前面
+            if (hasQuery)
+            {
+                score += MatchScore(hit, needle);
+            }
+
+            scored.Add((hit, score));
         }
 
-        return merged;
+        return scored
+            .OrderByDescending(x => x.Score)
+            .Select(x => x.Hit)
+            .ToList();
+    }
+
+    /// <summary>
+    /// 计算简单的文本匹配分，范围 0~1。
+    /// 名称完全匹配得 1 分，名称包含关键词得 0.7，仅描述包含得 0.2。
+    /// </summary>
+    private static double MatchScore(ResourceHit hit, string query)
+    {
+        if (hit.Name.Equals(query, StringComparison.OrdinalIgnoreCase)) return 1.0;
+
+        if (hit.Name.Contains(query, StringComparison.OrdinalIgnoreCase)) return 0.7;
+
+        if (hit.Description.Contains(query, StringComparison.OrdinalIgnoreCase)) return 0.2;
+
+        return 0;
     }
 
     /// <summary>把搜索结果转换成列表项。</summary>
