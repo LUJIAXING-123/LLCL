@@ -66,7 +66,11 @@
             </NavigationView.MenuItems>
 
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Content="工具" Tag="tools">
+                <!--
+                  工具页暂时隐藏：成就截图等条目尚未完整实现，
+                  待补齐后再放出。页面与后端代码保留。
+                -->
+                <NavigationViewItem Content="工具" Tag="tools" Visibility="Collapsed">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE90F;" />
                     </NavigationViewItem.Icon>
