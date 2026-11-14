@@ -66,3 +66,7 @@ tools/**/obj/
 .idea/
 *.DotSettings.user
 *.editorconfig.bak
+
+# 参考源码，不纳入版本控制
+pcl/
+pclce/
