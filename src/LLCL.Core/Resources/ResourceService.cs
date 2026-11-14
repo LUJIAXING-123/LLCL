@@ -263,13 +263,20 @@ public static class ResourceService
 
     // ---------------- CurseForge ----------------
 
-    /// <summary>搜索 CurseForge 资源（经镜像）。</summary>
+    /// <summary>
+    /// 搜索 CurseForge 资源（经镜像）。
+    /// <para>
+    /// 排序参数按 PCL-CE 的映射选择，注意 CurseForge 的枚举并非直觉：
+    /// sortField=2 是「关注数」、4 是「相关性」、6 才是「下载量」。
+    /// 这里默认用 6（下载量），否则热门模组会被关注数高的冷门项目挤下去。
+    /// </para>
+    /// </summary>
     public static async Task<List<ResourceHit>> SearchCurseForgeAsync(string query, ResourceType type,
         string? gameVersion = null, int limit = 20, int offset = 0, CancellationToken ct = default)
     {
         var url = $"{CurseForgeMirror}/mods/search?gameId=432&classId={TypeToClassId(type)}" +
                   $"&searchFilter={Uri.EscapeDataString(query)}&pageSize={limit}" +
-                  $"&index={offset}&sortField=2&sortOrder=desc";
+                  $"&index={offset}&sortField=6&sortOrder=desc";
         if (!string.IsNullOrEmpty(gameVersion))
             url += $"&gameVersion={Uri.EscapeDataString(gameVersion)}";
 

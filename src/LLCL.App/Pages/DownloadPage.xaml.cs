@@ -1132,17 +1132,24 @@ public sealed partial class DownloadPage : Page
     }
 
     /// <summary>
-    /// 合并两个源的结果并统一排序。
+    /// 合并两个源的结果并统一排序，逻辑照搬 PCL-CE 的 CompProjectsGet。
     /// <para>
-    /// 关键点：两站的下载量本身处于同一量级（实测 Modrinth 最高 2.87 亿、
-    /// CurseForge 最高 6.47 亿），差异不到 3 倍，远没有到需要加权的地步。
-    /// 之前的做法是「下载量 × 权重 再取对数」，而
-    /// log(a×7) = log(a) + log(7) 意味着给该源每个项目无条件加一个常数分，
-    /// 结果是一个源整体压过另一个源，表现为前 20 条全来自同一个源。
+    /// PCL-CE 分成两条路径，两者差异很大：
     /// </para>
     /// <para>
-    /// 现在的做法是各源除以本批结果的最大值，归一到 0~1 再排序：
-    /// 既消除了两站统计口径的细微差异，又不会改变项目之间的相对次序。
+    /// <b>浏览（无关键词）</b>：直接用「下载量 × 源权重」比较，不取对数。
+    /// 权重是按资源类型定的常数（Mod/整合包 Modrinth 记 7、CurseForge 记 1），
+    /// 但只要不放进对数里，它就只是等比缩放，项目之间的相对次序依然由下载量决定。
+    /// </para>
+    /// <para>
+    /// <b>搜索（有关键词）</b>：先算 log10 压缩量级，再叠加文本相似度。
+    /// 这一步取对数是因为搜索场景下不同源的匹配度差异可能极大，
+    /// 需要让相似度有足够权重。
+    /// </para>
+    /// <para>
+    /// 之前的错误就是把搜索分支的对数公式用到了浏览分支：
+    /// log(a×7) = log(a) + log(7)，权重退化成给整个源加一个常数分，
+    /// 源与源之间被整体拉开，于是前 20 条全部来自同一个源。
     /// </para>
     /// </summary>
     private static List<ResourceHit> MergeByScore(List<ResourceHit> modrinth,
@@ -1159,9 +1166,13 @@ public sealed partial class DownloadPage : Page
 
         if (all.Count == 0) return all;
 
-        // 各源本批的最大下载量，用于归一化
-        var modrinthMax = modrinth.Count == 0 ? 0 : modrinth.Max(h => h.Downloads);
-        var curseForgeMax = curseforge.Count == 0 ? 0 : curseforge.Max(h => h.Downloads);
+        // 源权重，与 PCL-CE 的 getDownloadCountMult 一致
+        static double Weight(ResourceSource source, ResourceType type) => type switch
+        {
+            ResourceType.Mod or ResourceType.Modpack => source == ResourceSource.CurseForge ? 1 : 7,
+            ResourceType.ResourcePack or ResourceType.Shader => source == ResourceSource.CurseForge ? 1 : 5,
+            _ => 1
+        };
 
         var hasQuery = !string.IsNullOrWhiteSpace(query);
         var needle = query?.Trim() ?? string.Empty;
@@ -1170,13 +1181,19 @@ public sealed partial class DownloadPage : Page
 
         foreach (var hit in all)
         {
-            var max = hit.Source == ResourceSource.Modrinth ? modrinthMax : curseForgeMax;
-            var normalised = max > 0 ? (double)hit.Downloads / max : 0;
+            var weighted = Math.Max(hit.Downloads, 1) * Weight(hit.Source, type);
+            double score;
 
-            var score = normalised;
-
-            // 有关键词时叠加匹配度，让精确命中的项目排到前面
-            if (hasQuery) score += MatchScore(hit, needle);
+            if (hasQuery)
+            {
+                // 搜索：压缩量级后叠加匹配度
+                score = Math.Log10(weighted) / 9 + MatchScore(hit, needle);
+            }
+            else
+            {
+                // 浏览：直接按加权下载量比较，不做对数变换
+                score = weighted;
+            }
 
             scored.Add((hit, score));
         }
