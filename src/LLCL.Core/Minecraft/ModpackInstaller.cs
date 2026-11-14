@@ -142,14 +142,25 @@ public static class ModpackInstaller
         await VanillaInstaller.InstallAsync(info.MinecraftVersion, versionsRoot, null, ct)
             .ConfigureAwait(false);
 
+        // 启动目标：有加载器就是加载器版本，否则是原版
+        var launchSourceId = info.MinecraftVersion;
+
         if (info.Loader is { } kind && !string.IsNullOrWhiteSpace(info.LoaderVersion))
         {
             progress?.Report(($"正在安装 {kind} {info.LoaderVersion}", 0.75));
-            await LoaderInstaller.InstallAsync(kind, info.MinecraftVersion, info.LoaderVersion,
-                null, ct).ConfigureAwait(false);
+            launchSourceId = await LoaderInstaller.InstallAsync(kind, info.MinecraftVersion,
+                info.LoaderVersion, null, ct).ConfigureAwait(false);
         }
 
-        // ---------- 4. 记录整合包信息 ----------
+        // ---------- 4. 为实例生成自己的版本文件 ----------
+        // 上一步把游戏与加载器装在了各自命名的目录里，实例目录下只有 overrides。
+        // 版本管理器要求存在 <实例>/<实例>.json，否则会判定为「缺少版本 JSON」而标红。
+        // 这里把启动目标的版本文件复制到实例目录并改成实例 ID，
+        // 让实例成为可独立启动的完整版本。
+        progress?.Report(("正在生成版本文件", 0.9));
+        CreateInstanceVersion(instanceId, launchSourceId, versionsRoot);
+
+        // ---------- 5. 记录整合包信息 ----------
         var settings = VersionSettings.Load(instanceId);
         settings.DisplayName = info.Name;
         settings.ModpackSource = info.Format.ToString();
@@ -159,6 +170,69 @@ public static class ModpackInstaller
 
         progress?.Report(("安装完成", 1.0));
         return instanceId;
+    }
+
+    /// <summary>
+    /// 用启动目标的版本文件生成实例自己的 <c>.json</c> 与 <c>.jar</c>。
+    /// <para>
+    /// 改 id 而不沿用源版本 ID 是为了让实例自包含：
+    /// 启动时 classpath 的根版本 ID 取自 JSON 里的 id，
+    /// 若保留源 ID，jar 仍会去源版本目录找，用户清理旧版本时实例就会失效。
+    /// </para>
+    /// </summary>
+    private static void CreateInstanceVersion(string instanceId, string sourceId, string versionsRoot)
+    {
+        var sourceJson = Path.Combine(versionsRoot, sourceId, sourceId + ".json");
+        if (!File.Exists(sourceJson))
+        {
+            Logger.Warn($"[整合包] 找不到版本文件 {sourceJson}，实例可能无法直接启动");
+            return;
+        }
+
+        try
+        {
+            var instanceDir = Path.Combine(versionsRoot, instanceId);
+            Directory.CreateDirectory(instanceDir);
+
+            // 复制 JSON 并把 id 改成实例 ID
+            var json = JsonNode.Parse(File.ReadAllText(sourceJson));
+            if (json is JsonObject obj)
+            {
+                obj["id"] = instanceId;
+
+                File.WriteAllText(
+                    Path.Combine(instanceDir, instanceId + ".json"),
+                    obj.ToJsonString(new System.Text.Json.JsonSerializerOptions
+                    {
+                        WriteIndented = true,
+                        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                    }));
+            }
+
+            // 复制本体 jar。加载器版本已把原版 jar 复制到自己目录，
+            // 所以源目录里一定有可用的 jar。
+            var sourceJar = Path.Combine(versionsRoot, sourceId, sourceId + ".jar");
+            if (!File.Exists(sourceJar))
+            {
+                var alt = Path.Combine(versionsRoot, sourceId, "client.jar");
+                if (File.Exists(alt)) sourceJar = alt;
+            }
+
+            if (File.Exists(sourceJar))
+            {
+                var targetJar = Path.Combine(instanceDir, instanceId + ".jar");
+                File.Copy(sourceJar, targetJar, true);
+                Logger.Info($"[整合包] 已生成实例版本文件，jar 来自 {sourceJar}");
+            }
+            else
+            {
+                Logger.Warn($"[整合包] 源版本 {sourceId} 没有 jar，实例可能无法启动");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"[整合包] 生成实例版本文件失败: {ex.Message}");
+        }
     }
 
     private static async Task DownloadFilesAsync(List<ModpackFile> files, string instanceDir,
