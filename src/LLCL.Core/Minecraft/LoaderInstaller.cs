@@ -421,6 +421,11 @@ public static class LoaderInstaller
         child.Remove("inheritsFrom");
         child["id"] = loaderVersionId;
 
+        // 单独记录所基于的原版版本。
+        // 切断 inheritsFrom 后这份信息本来会彻底丢失，
+        // 而整合包导出、版本详情都需要它来判断「基于哪个原版」。
+        child["llclParent"] = mcVersion;
+
         // 写回
         File.WriteAllText(loaderJsonPath, child.ToJsonString(new JsonSerializerOptions
         {

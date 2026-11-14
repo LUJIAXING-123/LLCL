@@ -582,6 +582,81 @@ public sealed partial class VersionSettingsPage : Page
         };
         panel.Children.Add(renameButton);
 
+        panel.Children.Add(Header("整合包"));
+
+        var packHint = new TextBlock
+        {
+            Text = "把此版本连同 mods、配置、资源包一起打包成整合包（Modrinth 格式），" +
+                   "可直接分享给他人安装。",
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
+        };
+        panel.Children.Add(packHint);
+
+        var packNameBox = new TextBox
+        {
+            Header = "整合包名称",
+            Text = _settings.DisplayName ?? _versionId,
+            PlaceholderText = "留空则使用版本显示名"
+        };
+        panel.Children.Add(packNameBox);
+
+        var packVersionBox = new TextBox
+        {
+            Header = "整合包版本",
+            Text = "1.0.0",
+            PlaceholderText = "例如 1.0.0"
+        };
+        panel.Children.Add(packVersionBox);
+
+        var includeSaves = new ToggleSwitch
+        {
+            Header = "包含存档",
+            IsOn = false,
+            OnContent = "包含",
+            OffContent = "不包含"
+        };
+        panel.Children.Add(includeSaves);
+
+        var includeConfig = new ToggleSwitch
+        {
+            Header = "包含配置文件（config 目录）",
+            IsOn = true,
+            OnContent = "包含",
+            OffContent = "不包含"
+        };
+        panel.Children.Add(includeConfig);
+
+        var bundleFiles = new ToggleSwitch
+        {
+            Header = "把文件打包进压缩包",
+            IsOn = true,
+            OnContent = "打包",
+            OffContent = "仅记录校验值"
+        };
+        panel.Children.Add(bundleFiles);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "关闭「打包文件」时，整合包只记录每个文件的校验值，对方需要自行准备同名文件，" +
+                   "体积小但可用性差，一般保持开启。",
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"]
+        });
+
+        var exportButton = new Button
+        {
+            Content = "导出为整合包",
+            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        exportButton.Click += async (_, _) => await ExportModpackAsync(
+            packNameBox.Text, packVersionBox.Text,
+            includeSaves.IsOn, includeConfig.IsOn, bundleFiles.IsOn);
+        panel.Children.Add(exportButton);
+
         panel.Children.Add(Header("危险操作"));
 
         var repairButton = new Button { Content = "修复 / 补全文件（重新下载原版文件）" };
@@ -616,6 +691,58 @@ public sealed partial class VersionSettingsPage : Page
             MainWindow.Instance?.Navigate("download");
         };
         panel.Children.Add(deleteButton);
+    }
+
+    /// <summary>
+    /// 导出整合包。产物落在「文档」目录，完成后询问是否打开所在文件夹。
+    /// </summary>
+    private async Task ExportModpackAsync(string? name, string? version,
+        bool includeSaves, bool includeConfig, bool bundleFiles)
+    {
+        try
+        {
+            var safeName = string.IsNullOrWhiteSpace(name) ? _versionId : name.Trim();
+            foreach (var c in Path.GetInvalidFileNameChars())
+                safeName = safeName.Replace(c, '_');
+
+            var version2 = string.IsNullOrWhiteSpace(version) ? "1.0.0" : version.Trim();
+
+            var outputDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "LLCL 整合包");
+            Directory.CreateDirectory(outputDir);
+
+            var outputPath = Path.Combine(outputDir, $"{safeName}-{version2}.mrpack");
+
+            var progress = new Progress<(string step, double ratio)>(_ => { });
+
+            var options = new ModpackExportOptions
+            {
+                Name = safeName,
+                Version = version2,
+                IncludeSaves = includeSaves,
+                IncludeConfig = includeConfig,
+                BundleFiles = bundleFiles
+            };
+
+            var result = await ModpackExporter.ExportAsync(_versionId, outputPath, options, progress);
+
+            if (!await ConfirmAsync("导出完成",
+                    $"已生成整合包：\n{result.Path}\n\n" +
+                    $"包含 {result.FileCount} 个文件，共 {result.Size / 1024.0 / 1024:F1} MB。\n\n" +
+                    "是否打开所在文件夹？"))
+                return;
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = Path.GetDirectoryName(result.Path)!,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "导出整合包失败");
+            await ShowAsync("导出失败", ex.Message);
+        }
     }
 
     #endregion

@@ -861,11 +861,19 @@ public sealed partial class DownloadPage : Page
 
         try
         {
+            var type = CurrentResourceType();
+
+            // 整合包不是「装进某个版本」的资源，而是一个独立的新实例，
+            // 因此不走「安装到哪个版本」的弹窗，直接解压成一个新版本。
+            if (type == ResourceType.Modpack)
+            {
+                await InstallModpackFromDetailAsync();
+                return;
+            }
+
             // 与列表页下载一致：弹出「安装到哪个版本」让用户选择
             var versionId = await PickTargetVersionAsync();
             if (versionId is null) return;
-
-            var type = CurrentResourceType();
 
             // 一并下载用户勾选的前置
             var checkedDeps = (DetailDependencyList.ItemsSource as IEnumerable<DependencyItem> ?? [])
@@ -916,6 +924,79 @@ public sealed partial class DownloadPage : Page
         {
             DetailDownloadButton.IsEnabled = true;
             DetailProgress.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    /// <summary>
+    /// 安装整合包：先下载压缩包，再解压成独立实例。
+    /// 整合包自带完整的游戏与加载器信息，因此不需要用户先选一个已有版本。
+    /// </summary>
+    private async Task InstallModpackFromDetailAsync()
+    {
+        if (_detailCard is null || _detailFile is null) return;
+
+        var file = _detailFile;
+
+        // 实例名默认用整合包名称，去掉文件名不允许的字符
+        var rawName = _detailCard.Name;
+        var instanceId = new string(rawName
+            .Where(c => !Path.GetInvalidFileNameChars().Contains(c))
+            .ToArray()).Trim();
+
+        if (string.IsNullOrWhiteSpace(instanceId)) instanceId = "Modpack";
+
+        // 重名时追加序号
+        var versionsRoot = Paths.VersionsDir;
+        var candidate = instanceId;
+        var suffix = 2;
+        while (Directory.Exists(Path.Combine(versionsRoot, candidate)))
+        {
+            candidate = $"{instanceId}-{suffix}";
+            suffix++;
+        }
+        instanceId = candidate;
+
+        var tempDir = Path.Combine(Paths.DataRoot, "Cache", "Modpack");
+        Directory.CreateDirectory(tempDir);
+        var archivePath = Path.Combine(tempDir, file.FileName);
+
+        var progress = MakeProgress();
+
+        await DownloadQueue.RunAsync(
+            $"安装整合包 {_detailCard.Name}", DownloadTaskKind.Resource,
+            async (downloader, token) =>
+            {
+                // 1. 下载整合包压缩包
+                progress?.Report(($"下载 {file.FileName}", 0.1));
+                await downloader.DownloadAllAsync(
+                    [new LLCL.Core.Net.DownloadItem
+                    {
+                        Url = file.Url,
+                        TargetPath = archivePath,
+                        Sha1 = file.Sha1,
+                        Size = file.Size
+                    }], token);
+
+                // 2. 解压并安装
+                await ModpackInstaller.InstallAsync(archivePath, instanceId, versionsRoot, progress, token);
+
+                // 3. 清理临时压缩包
+                try { if (File.Exists(archivePath)) File.Delete(archivePath); } catch { }
+            },
+            default,
+            instanceId);
+
+        DetailStatus.Text = $"整合包已安装为版本「{instanceId}」，可在首页启动";
+
+        // 刷新左侧版本列表，让新实例立即可见
+        try
+        {
+            var entries = VersionManager.ScanAll().Where(e => !e.IsBroken).ToList();
+            VersionList.ItemsSource = entries;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"刷新版本列表失败: {ex.Message}");
         }
     }
 

@@ -90,6 +90,16 @@ public sealed class VersionSettings
     /// <summary>自定义备注。</summary>
     public string? Comment { get; set; }
 
+    // ---------- 整合包来源 ----------
+    /// <summary>本版本由整合包安装而来时，记录来源平台（如 Modrinth / CurseForge）。</summary>
+    public string? ModpackSource { get; set; }
+
+    /// <summary>整合包自身的版本号。</summary>
+    public string? ModpackVersion { get; set; }
+
+    /// <summary>整合包项目的在线标识，用于回查更新。</summary>
+    public string? ModpackId { get; set; }
+
     /// <summary>
     /// 版本隔离的手动指定，与 PCL 的三态语义一致：
     /// <c>null</c> = 跟随判定规则（自动检测 + 全局方案）；

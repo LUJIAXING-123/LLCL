@@ -458,6 +458,15 @@ public static class ResourceService
         // 与 PCL 一致：默认放入 .minecraft 根目录的对应子目录，开启版本隔离后放入 versions/<id>
         var settings = VersionSettings.Load(versionId);
         var baseDir = settings.GetGameDir(versionId);
+        // 整合包不是「放进某个子目录」的资源，而是需要解压成独立实例，
+        // 误走这条路径会把 .mrpack 直接丢进 mods 目录，游戏根本加载不了。
+        // 正确的入口是 ModpackInstaller.InstallAsync。
+        if (type == ResourceType.Modpack)
+        {
+            throw new InvalidOperationException(
+                "整合包需要单独安装，请使用 ModpackInstaller 进行解压与依赖补全。");
+        }
+
         var subDir = type switch
         {
             ResourceType.Mod => "mods",
