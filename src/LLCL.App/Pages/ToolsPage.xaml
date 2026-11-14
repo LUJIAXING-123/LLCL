@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="LLCL.Pages.ToolsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Background="Transparent">
+
+    <Grid Padding="{StaticResource PagePadding}" RowSpacing="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Spacing="2">
+            <TextBlock Text="工具" Style="{StaticResource SectionHeaderTextStyle}" />
+            <TextBlock Text="一些不常用但偶尔会派上用场的小功能"
+                       Style="{StaticResource SubHeaderTextStyle}" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="16" MaxWidth="880" HorizontalAlignment="Left">
+
+                <!-- 百宝箱：一排快捷操作按钮 -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="14">
+                        <TextBlock Text="百宝箱" FontSize="18" FontWeight="SemiBold" />
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Content="清理游戏垃圾" MinWidth="140" Height="40"
+                                    Click="Cleanup_Click" />
+                            <Button Content="今日人品" MinWidth="120" Height="40"
+                                    Click="Luck_Click" />
+                            <Button Content="创建快捷方式" MinWidth="140" Height="40"
+                                    Click="CreateShortcut_Click" />
+                            <Button Content="查看启动次数" MinWidth="140" Height="40"
+                                    Click="LaunchCount_Click" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- 下载自定义文件 -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="下载自定义文件" FontSize="18" FontWeight="SemiBold" />
+                            <TextBlock FontSize="13" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="使用内置的多线程下载引擎下载任意文件。部分站点（例如网盘）会因防盗链返回 403，无法下载。" />
+                        </StackPanel>
+
+                        <TextBox x:Name="DownloadUrlBox" Header="下载地址"
+                                 PlaceholderText="https://example.com/file.jar" />
+
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="DownloadFolderBox" Header="保存到"
+                                     PlaceholderText="留空则保存到下载目录" />
+                            <Button Grid.Column="1" Content="选择" VerticalAlignment="Bottom"
+                                    Height="32" Click="PickFolder_Click" />
+                        </Grid>
+
+                        <TextBox x:Name="DownloadNameBox" Header="文件名"
+                                 PlaceholderText="留空则从地址推断" />
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button x:Name="StartDownloadButton" Content="开始下载"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    MinWidth="140" Height="36" Click="StartDownload_Click" />
+                            <Button Content="打开文件夹" MinWidth="140" Height="36"
+                                    Click="OpenDownloadFolder_Click" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="DownloadStatusText" FontSize="12" TextWrapping="Wrap"
+                                   Visibility="Collapsed"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 下载正版玩家皮肤 -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="下载正版玩家的皮肤" FontSize="18" FontWeight="SemiBold" />
+                            <TextBlock FontSize="13" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="输入正版玩家名，可直接取得该玩家的皮肤文件。" />
+                        </StackPanel>
+
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="SkinNameBox" Header="正版玩家名"
+                                     PlaceholderText="例如 Notch" />
+                            <Button Grid.Column="1" Content="获取并保存"
+                                    VerticalAlignment="Bottom" Height="32"
+                                    Click="SaveSkin_Click" />
+                        </Grid>
+
+                        <TextBlock x:Name="SkinStatusText" FontSize="12" TextWrapping="Wrap"
+                                   Visibility="Collapsed"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 服务器信息查询 -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="查询服务器信息" FontSize="18" FontWeight="SemiBold" />
+                            <TextBlock FontSize="13" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="查询服务器是否在线、当前人数与延迟。" />
+                        </StackPanel>
+
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="ServerBox" Header="服务器地址"
+                                     PlaceholderText="例如 mc.hypixel.net 或 play.example.com:25565" />
+                            <Button Grid.Column="1" Content="查询"
+                                    VerticalAlignment="Bottom" Height="32"
+                                    Click="QueryServer_Click" />
+                        </Grid>
+
+                        <TextBlock x:Name="ServerStatusText" FontSize="12" TextWrapping="Wrap"
+                                   Visibility="Collapsed"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 成就生成 -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="生成成就截图" FontSize="18" FontWeight="SemiBold" />
+                            <TextBlock FontSize="13" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="填写物品 ID 与两行文字，生成一张 Minecraft 风格的成绩单截图。" />
+                        </StackPanel>
+
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="AchievementItemBox" Header="物品 ID"
+                                     PlaceholderText="例如 diamond_sword" />
+                            <TextBox Grid.Column="1" x:Name="AchievementTitleBox" Header="标题"
+                                     PlaceholderText="例如 获得成就！" />
+                        </Grid>
+
+                        <TextBox x:Name="AchievementLine1Box" Header="第一行"
+                                 PlaceholderText="例如 钻石剑" />
+                        <TextBox x:Name="AchievementLine2Box" Header="第二行"
+                                 PlaceholderText="例如 挥剑斩断一切" />
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Content="预览" MinWidth="120" Height="36"
+                                    Click="PreviewAchievement_Click" />
+                            <Button Content="保存" MinWidth="120" Height="36"
+                                    Click="SaveAchievement_Click" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="AchievementStatusText" FontSize="12" TextWrapping="Wrap"
+                                   Visibility="Collapsed"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

@@ -192,6 +192,7 @@ public sealed partial class MainWindow : Window
                 "home" => new HomePage(),
                 "download" => new DownloadPage(),
                 "link" => new LinkPage(),
+                "tools" => new ToolsPage(),
                 "settings" => new SettingsPage(),
                 "about" => new AboutPage(),
                 _ => new HomePage()
