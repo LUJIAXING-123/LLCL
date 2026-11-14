@@ -5,7 +5,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Background="Transparent">
 
-    <Grid Padding="{StaticResource PagePadding}" RowSpacing="20">
+    <Grid Padding="{StaticResource PagePadding}" RowSpacing="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -25,105 +25,95 @@
                     Click="AccountButton_Click" />
         </Grid>
 
-        <!--
-          主面板整体靠下放置：用一个纵向 StackPanel + Spacer 把内容推到下部，
-          同时把各面板略微放大，提升视觉冲击力。
-        -->
-        <Grid Grid.Row="1">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Spacing="16">
 
-            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto"
-                          Padding="0,0,0,8">
-                <StackPanel Spacing="20" MaxWidth="960" HorizontalAlignment="Stretch">
+                <!--
+                  启动卡片。
+                  头像 64px，无边框，向上移 43px 使约 1/3 落在卡片内。
+                  启动按钮贴右侧，尺寸参考微软商店的获取按钮。
+                -->
+                <Grid>
+                    <Border Style="{StaticResource CardStyle}" Padding="20,36,20,20">
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="64" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
 
-                    <!--
-                      启动卡片。
-                      头像覆盖在卡片前部：整体上移 88px（约 2/3 高度），
-                      于是头像上 2/3 探出卡片，下 1/3 落在卡片内。
-                      头像边长 132px，与放大的启动按钮高度相当。
-                    -->
-                    <Grid>
-                        <Border Style="{StaticResource CardStyle}" Padding="24,44,24,24">
-                            <StackPanel Spacing="18">
-                                <!-- 左侧为头像留出空间 -->
-                                <StackPanel Spacing="4" Margin="170,0,0,0">
-                                    <TextBlock Text="启动游戏" FontSize="20" FontWeight="SemiBold" />
-                                    <TextBlock x:Name="CurrentVersionText" Style="{StaticResource SubHeaderTextStyle}" />
+                            <StackPanel Grid.Column="1" Spacing="8" VerticalAlignment="Center">
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="启动游戏" FontSize="16" FontWeight="SemiBold" />
+                                    <TextBlock x:Name="CurrentVersionText"
+                                               Style="{StaticResource SubHeaderTextStyle}" />
                                 </StackPanel>
 
                                 <ComboBox x:Name="VersionComboBox" HorizontalAlignment="Stretch"
                                           Header="游戏版本"
                                           SelectionChanged="VersionComboBox_SelectionChanged" />
 
-                                <!-- 大号启动按钮，参考 LabyMod 的整块强调样式 -->
-                                <Button x:Name="LaunchButton" Content="启动"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        HorizontalAlignment="Stretch"
-                                        Height="72" FontSize="24" FontWeight="SemiBold"
-                                        CornerRadius="10"
-                                        Click="LaunchButton_Click" />
-
                                 <ProgressBar x:Name="LaunchProgress" IsIndeterminate="True" Value="0"
-                                             Visibility="Collapsed" Height="4" />
+                                             Visibility="Collapsed" Height="3" />
                                 <TextBlock x:Name="LaunchStageText" Visibility="Collapsed"
                                            Style="{StaticResource SubHeaderTextStyle}"
                                            TextTrimming="CharacterEllipsis" />
                             </StackPanel>
-                        </Border>
 
-                        <!-- 头像：后声明位于上层，负上边距使其向上探出卡片 -->
-                        <Grid Width="132" Height="132"
-                              HorizontalAlignment="Left" VerticalAlignment="Top"
-                              Margin="40,-88,0,0"
-                              Canvas.ZIndex="1">
-                            <Border CornerRadius="10"
-                                    Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1">
-                                <Image x:Name="AvatarImage" Stretch="UniformToFill" />
-                            </Border>
-                            <Border x:Name="AvatarFallback" CornerRadius="10"
-                                    Background="{ThemeResource AccentFillColorDefaultBrush}"
-                                    Visibility="Collapsed">
-                                <TextBlock x:Name="AvatarInitial" FontSize="48" FontWeight="Bold"
-                                           Foreground="White"
-                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
-                            </Border>
+                            <!-- 启动按钮：整块色底 + 圆角，样式对齐微软商店 -->
+                            <Button Grid.Column="2" x:Name="LaunchButton" Content="启动"
+                                    Style="{StaticResource AccentButtonStyle}"
+                                    Height="52" MinWidth="200" Padding="32,0"
+                                    CornerRadius="4" FontSize="16" FontWeight="SemiBold"
+                                    VerticalAlignment="Center"
+                                    Click="LaunchButton_Click" />
                         </Grid>
-                    </Grid>
+                    </Border>
 
-                    <!-- 信息卡片 -->
-                    <Grid ColumnSpacing="20">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-
-                        <Border Style="{StaticResource CardStyle}" Padding="24">
-                            <StackPanel Spacing="12">
-                                <TextBlock Text="已安装版本" FontSize="18" FontWeight="SemiBold" />
-                                <TextBlock x:Name="VersionCountText" Style="{StaticResource SubHeaderTextStyle}" />
-                                <StackPanel Orientation="Horizontal" Spacing="10">
-                                    <Button Content="前往下载中心" Click="GoDownload_Click" />
-                                    <Button Content="管理此版本" Click="ManageVersion_Click" />
-                                </StackPanel>
-                            </StackPanel>
-                        </Border>
-
-                        <!-- 联机状态卡片随联机入口一并隐藏 -->
-                        <Border Grid.Column="1" Style="{StaticResource CardStyle}" Visibility="Collapsed">
-                            <StackPanel Spacing="12">
-                                <TextBlock Text="联机状态" FontSize="18" FontWeight="SemiBold" />
-                                <TextBlock x:Name="LinkStateText" Style="{StaticResource SubHeaderTextStyle}" />
-                                <Button Content="打开联机页" Click="GoLink_Click" />
-                            </StackPanel>
+                    <!-- 头像覆盖层：后声明位于上层，负上边距使其向上探出 -->
+                    <Grid Width="64" Height="64"
+                          HorizontalAlignment="Left" VerticalAlignment="Top"
+                          Margin="20,-43,0,0"
+                          IsHitTestVisible="False">
+                        <Image x:Name="AvatarImage" Stretch="Fill" />
+                        <Border x:Name="AvatarFallback"
+                                Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                Visibility="Collapsed">
+                            <TextBlock x:Name="AvatarInitial" FontSize="26" FontWeight="Bold"
+                                       Foreground="White"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                     </Grid>
-                </StackPanel>
-            </ScrollViewer>
-        </Grid>
+                </Grid>
+
+                <!-- 信息卡片 -->
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="已安装版本" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock x:Name="VersionCountText" Style="{StaticResource SubHeaderTextStyle}" />
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button Content="前往下载中心" Click="GoDownload_Click" />
+                                <Button Content="管理此版本" Click="ManageVersion_Click" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 联机状态卡片随联机入口一并隐藏 -->
+                    <Border Grid.Column="1" Style="{StaticResource CardStyle}" Visibility="Collapsed">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="联机状态" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock x:Name="LinkStateText" Style="{StaticResource SubHeaderTextStyle}" />
+                            <Button Content="打开联机页" Click="GoLink_Click" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
     </Grid>
 </Page>

@@ -19,14 +19,15 @@ namespace LLCL.Services;
 /// </summary>
 public static class SkinHeadRenderer
 {
-    /// <summary>输出头像边长，与启动按钮高度一致。</summary>
-    public const int Size = 56;
+    /// <summary>
+    /// 输出头像边长。
+    /// 位图直接按最终显示尺寸生成，界面上 1:1 显示，
+    /// 这样不会触发缩放插值，像素保持清晰。
+    /// </summary>
+    public const int Size = 64;
 
-    /// <summary>脸层在输出图中的尺寸，比帽子层小 4px 形成帽檐。</summary>
-    private const int FaceSize = 48;
-
-    /// <summary>脸层相对输出图的偏移。</summary>
-    private const int FaceOffset = 4;
+    /// <summary>脸层相对输出图的内缩，形成一圈帽檐。</summary>
+    private const int HatMargin = 4;
 
     /// <summary>皮肤贴图中脸层左上角坐标。</summary>
     private const int FaceU = 8;
@@ -77,11 +78,12 @@ public static class SkinHeadRenderer
             var output = new byte[Size * Size * 4];
             var outStride = Size * 4;
 
-            // 1) 脸层：8×8 -> 48×48，放在 (4,4)
+            // 1) 脸层：8×8 放大到 (Size-8)×(Size-8)，四周内缩 4px
+            var faceSize = Size - HatMargin * 2;
             BlitScaled(skinPixels, stride, scale, FaceU, FaceV,
-                output, outStride, FaceOffset, FaceOffset, FaceSize, FaceSize);
+                output, outStride, HatMargin, HatMargin, faceSize, faceSize);
 
-            // 2) 帽子层：若该区域全透明则跳过，否则铺满 56×56
+            // 2) 帽子层：若该区域全透明则跳过，否则铺满整图，外圈即帽檐
             if (!IsRegionEmpty(skinPixels, stride, scale, HatU, HatV))
             {
                 BlitScaled(skinPixels, stride, scale, HatU, HatV,
