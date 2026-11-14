@@ -108,10 +108,39 @@ public static class GameLaunchService
         }
 
         var vs = VersionSettings.Load(versionId);
+
+        // 版本自带的登录服务器优先于账号本身的设置：
+        // 整合包会把发行方指定的验证服务器写进版本设置，
+        // 玩家双击整合包后应当直接走该服务器，而不是沿用自己账号的。
+        var authServer = !string.IsNullOrWhiteSpace(vs.ServerAuthServer)
+            ? vs.ServerAuthServer
+            : account.Kind == AccountKind.ThirdParty ? account.ServerUrl : null;
+
+        if (!string.IsNullOrWhiteSpace(vs.ServerAuthServer) &&
+            account.Kind != AccountKind.ThirdParty)
+        {
+            onStage?.Invoke(new LaunchStage("正在准备登录服务器组件…", 0.36));
+            injectorPath = await AuthlibInjector.EnsureAsync(vs.ServerAuthServer);
+        }
+
         var maxMemory = vs.OverrideMemory == true
             ? vs.MaxMemoryMb
             : config.MaxMemoryMb > 0 ? config.MaxMemoryMb : SuggestMemoryMb();
         var minMemory = vs.OverrideMemory == true ? vs.MinMemoryMb : config.MinMemoryMb;
+
+        // 自动进入服务器：游戏的 --server / --port 参数，
+        // 版本设置里填了地址就优先使用，忽略全局的自动进入配置。
+        var enterServer = vs.ServerEnter;
+        var enterPort = (int?)null;
+        if (!string.IsNullOrWhiteSpace(enterServer))
+        {
+            var colon = enterServer.LastIndexOf(':');
+            if (colon > 0 && int.TryParse(enterServer[(colon + 1)..], out var parsedPort))
+            {
+                enterPort = parsedPort;
+                enterServer = enterServer[..colon];
+            }
+        }
 
         var options = new GameLauncher.LaunchOptions
         {
@@ -124,9 +153,11 @@ public static class GameLaunchService
             Fullscreen = vs.OverrideWindow == true ? vs.Fullscreen : config.Fullscreen,
             Width = vs.OverrideWindow == true ? vs.Width : config.WindowWidth,
             Height = vs.OverrideWindow == true ? vs.Height : config.WindowHeight,
-            // 第三方账号需要注入 authlib-injector 才能正确验证并显示皮肤
-            AuthServerUrl = account.Kind == AccountKind.ThirdParty ? account.ServerUrl : null,
-            AuthlibInjectorPath = injectorPath
+            // 第三方账号或版本指定的登录服务器都需要注入 authlib-injector
+            AuthServerUrl = authServer,
+            AuthlibInjectorPath = injectorPath,
+            ServerHost = enterServer,
+            ServerPort = enterPort
         };
 
         // ---------- 5. 启动 ----------

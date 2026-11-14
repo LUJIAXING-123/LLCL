@@ -277,6 +277,118 @@ public sealed partial class VersionSettingsPage : Page
             v => _settings.ExtraJvmArgs = v.Split(' ', StringSplitOptions.RemoveEmptyEntries)));
         panel.Children.Add(MakeText("额外游戏参数（空格分隔）", string.Join(' ', _settings.ExtraGameArgs),
             v => _settings.ExtraGameArgs = v.Split(' ', StringSplitOptions.RemoveEmptyEntries)));
+
+        BuildServerSettings(panel);
+        BuildAdvanceSettings(panel);
+    }
+
+    /// <summary>
+    /// 服务器设置，对应 PCL-CE 的 CardServer。
+    /// 用于整合包内置登录服务器：启动时注入 authlib-injector，
+    /// 并可自动进入指定的服务器地址。
+    /// </summary>
+    private void BuildServerSettings(StackPanel panel)
+    {
+        panel.Children.Add(Header("服务器"));
+        panel.Children.Add(Hint(
+            "填写后启动时会自动注入登录服务器，并可进入指定服务器地址。\n" +
+            "这些设置在整合包分发场景下最有用，普通游玩留空即可。"));
+
+        panel.Children.Add(MakeText("自动进入服务器", _settings.ServerEnter ?? string.Empty,
+            v => _settings.ServerEnter = string.IsNullOrWhiteSpace(v) ? null : v.Trim(),
+            "例如 mc.example.com:25565"));
+
+        var loginRequire = new ComboBox
+        {
+            Header = "限制登录",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        loginRequire.Items.Add("不限制（允许任何登录服务器）");
+        loginRequire.Items.Add("仅允许使用下方登录服务器");
+        loginRequire.SelectedIndex = _settings.ServerLoginRequire == true ? 1 : 0;
+        loginRequire.SelectionChanged += (_, _) =>
+        {
+            _settings.ServerLoginRequire = loginRequire.SelectedIndex == 1;
+            Save();
+        };
+        panel.Children.Add(loginRequire);
+
+        panel.Children.Add(MakeText("登录服务器", _settings.ServerAuthServer ?? string.Empty,
+            v => _settings.ServerAuthServer = string.IsNullOrWhiteSpace(v) ? null : v.Trim(),
+            "例如 https://littleskin.cn/api/yggdrasil"));
+
+        panel.Children.Add(MakeText("注册地址", _settings.ServerAuthRegister ?? string.Empty,
+            v => _settings.ServerAuthRegister = string.IsNullOrWhiteSpace(v) ? null : v.Trim(),
+            "例如 https://example.com/register"));
+
+        panel.Children.Add(MakeText("服务器名称", _settings.ServerAuthName ?? string.Empty,
+            v => _settings.ServerAuthName = string.IsNullOrWhiteSpace(v) ? null : v.Trim(),
+            "显示在登录界面的名称，可留空"));
+    }
+
+    /// <summary>
+    /// 高级设置，对应 PCL-CE 的 CardAdvance。
+    /// 这些选项大多用于兼容老旧整合包或排查启动问题，默认保持关闭。
+    /// </summary>
+    private void BuildAdvanceSettings(StackPanel panel)
+    {
+        panel.Children.Add(Header("高级"));
+        panel.Children.Add(Hint(
+            "以下选项仅用于兼容异常版本或排查启动问题，不确定时请保持默认。\n" +
+            "注意：渲染器与部分兼容开关目前只记录在版本配置里，尚未接入实际启动参数。"));
+
+        var renderer = new ComboBox
+        {
+            Header = "渲染器",
+            HorizontalAlignment = HorizontalAlignment.Stretch
+        };
+        renderer.Items.Add("跟随全局设置");
+        renderer.Items.Add("默认（由游戏决定）");
+        renderer.Items.Add("OpenGL（GLFW）");
+        renderer.Items.Add("Vulkan");
+        renderer.SelectedIndex = _settings.AdvanceRenderer switch
+        {
+            "default" => 1,
+            "lwjgl3" => 2,
+            "vulkan" => 3,
+            _ => 0
+        };
+        renderer.SelectionChanged += (_, _) =>
+        {
+            _settings.AdvanceRenderer = renderer.SelectedIndex switch
+            {
+                1 => "default",
+                2 => "lwjgl3",
+                3 => "vulkan",
+                _ => null
+            };
+            Save();
+        };
+        panel.Children.Add(renderer);
+
+        panel.Children.Add(MakeToggle("启动后等待游戏窗口出现",
+            _settings.AdvanceRunWait, v => _settings.AdvanceRunWait = v));
+
+        panel.Children.Add(MakeToggle("禁用 Java 版本检查",
+            _settings.AdvanceDisableJavaCheck, v => _settings.AdvanceDisableJavaCheck = v));
+
+        panel.Children.Add(MakeToggle("使用旧版 assets 索引",
+            _settings.AdvanceUseAssetsV2, v => _settings.AdvanceUseAssetsV2 = v));
+
+        panel.Children.Add(MakeToggle("使用系统代理启动游戏",
+            _settings.AdvanceUseProxy, v => _settings.AdvanceUseProxy = v));
+
+        panel.Children.Add(MakeToggle("禁用 JavaLaunchWrapper",
+            _settings.AdvanceDisableJLW, v => _settings.AdvanceDisableJLW = v));
+
+        panel.Children.Add(MakeToggle("禁用 Forge 的 Log4j 补丁",
+            _settings.AdvanceDisableLog4jPatch, v => _settings.AdvanceDisableLog4jPatch = v));
+
+        panel.Children.Add(MakeToggle("使用调试用 log4j2 配置",
+            _settings.AdvanceUseDebugLog4j, v => _settings.AdvanceUseDebugLog4j = v));
+
+        panel.Children.Add(MakeToggle("禁用 LWJGL unsafe agent",
+            _settings.AdvanceDisableLwjglUnsafeAgent, v => _settings.AdvanceDisableLwjglUnsafeAgent = v));
     }
 
     private void ApplyJavaOverride(bool enabled)

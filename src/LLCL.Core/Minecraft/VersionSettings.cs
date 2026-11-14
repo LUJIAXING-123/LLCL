@@ -34,6 +34,55 @@ public sealed class VersionSettings
     public string[] ExtraJvmArgs { get; set; } = [];
     public string[] ExtraGameArgs { get; set; } = [];
 
+    // ---------- 服务器（对应 PCL 的 CardServer） ----------
+    /// <summary>
+    /// 启动后自动加入的服务器地址。支持 host 或 host:port。
+    /// </summary>
+    public string? ServerEnter { get; set; }
+
+    /// <summary>是否仅允许登录到指定验证服务器（对应 PCL 的“限制登录”）。</summary>
+    public bool? ServerLoginRequire { get; set; }
+
+    /// <summary>登录服务器（authlib-injector 的 Yggdrasil 地址）。</summary>
+    public string? ServerAuthServer { get; set; }
+
+    /// <summary>注册服务器地址，仅用于展示给玩家的跳转链接。</summary>
+    public string? ServerAuthRegister { get; set; }
+
+    /// <summary>登录服务器显示名称。</summary>
+    public string? ServerAuthName { get; set; }
+
+    // ---------- 高级（对应 PCL 的 CardAdvance） ----------
+    /// <summary>渲染器：空 = 跟随全局；可选 default / lwjgl3 / lwjgl2 等。</summary>
+    public string? AdvanceRenderer { get; set; }
+
+    /// <summary>启动后等待游戏窗口出现再返回，便于统计启动耗时。</summary>
+    public bool AdvanceRunWait { get; set; }
+
+    /// <summary>启动前自动更新 mod（PCL 的行为，默认关闭）。</summary>
+    public bool AdvanceDisableModUpdate { get; set; }
+
+    /// <summary>禁用 Java 版本检查。</summary>
+    public bool AdvanceDisableJavaCheck { get; set; }
+
+    /// <summary>使用旧版 assets 索引，兼容部分老旧整合包。</summary>
+    public bool AdvanceUseAssetsV2 { get; set; }
+
+    /// <summary>使用系统代理启动游戏。</summary>
+    public bool AdvanceUseProxy { get; set; }
+
+    /// <summary>禁用 JavaLaunchWrapper，缓解部分 Forge 版本的冲突。</summary>
+    public bool AdvanceDisableJLW { get; set; }
+
+    /// <summary>禁用新版 Forge 的 Log4j 补丁（仅调试用）。</summary>
+    public bool AdvanceDisableLog4jPatch { get; set; }
+
+    /// <summary>使用调试用 log4j2 配置。</summary>
+    public bool AdvanceUseDebugLog4j { get; set; }
+
+    /// <summary>禁用 LWJGL 的 unsafe agent。</summary>
+    public bool AdvanceDisableLwjglUnsafeAgent { get; set; }
+
     // ---------- 其他 ----------
     /// <summary>版本图标（PNG 文件名，位于版本目录）。</summary>
     public string? Icon { get; set; }
