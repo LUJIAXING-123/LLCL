@@ -266,9 +266,9 @@ public static class ResourceService
     /// <summary>
     /// 搜索 CurseForge 资源（经镜像）。
     /// <para>
-    /// 排序参数按 PCL-CE 的映射选择，注意 CurseForge 的枚举并非直觉：
-    /// sortField=2 是「关注数」、4 是「相关性」、6 才是「下载量」。
-    /// 这里默认用 6（下载量），否则热门模组会被关注数高的冷门项目挤下去。
+    /// 排序参数按 PCL-CE 的 Default 分支取 2。
+    /// CurseForge 的枚举不直觉：2 是「关注数」、4 是「相关性」、6 才是「下载量」。
+    /// 虽然 2 对应关注数，但 PCL 的默认浏览也用它，为保证两边的结果一致这里沿用。
     /// </para>
     /// </summary>
     public static async Task<List<ResourceHit>> SearchCurseForgeAsync(string query, ResourceType type,
@@ -276,7 +276,7 @@ public static class ResourceService
     {
         var url = $"{CurseForgeMirror}/mods/search?gameId=432&classId={TypeToClassId(type)}" +
                   $"&searchFilter={Uri.EscapeDataString(query)}&pageSize={limit}" +
-                  $"&index={offset}&sortField=6&sortOrder=desc";
+                  $"&index={offset}&sortField=2&sortOrder=desc";
         if (!string.IsNullOrEmpty(gameVersion))
             url += $"&gameVersion={Uri.EscapeDataString(gameVersion)}";
 

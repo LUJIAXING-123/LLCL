@@ -1155,21 +1155,22 @@ public sealed partial class DownloadPage : Page
     private static List<ResourceHit> MergeByScore(List<ResourceHit> modrinth,
         List<ResourceHit> curseforge, ResourceType type, string? query)
     {
-        // 去重：同一项目在两个源都上架时只留 Modrinth 那条
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 不去重：PCL-CE 只调整顺序、不剔除重复项，
+        // 同一模组在两个源各占一条是它的正常表现。
         var all = new List<ResourceHit>(modrinth.Count + curseforge.Count);
-
-        foreach (var hit in modrinth.Concat(curseforge))
-        {
-            if (seen.Add(Normalize(hit.Name))) all.Add(hit);
-        }
+        all.AddRange(modrinth);
+        all.AddRange(curseforge);
 
         if (all.Count == 0) return all;
 
-        // 源权重，与 PCL-CE 的 getDownloadCountMult 一致
+        // 源权重。用 PCL 截图里前 12 名的真实下载量反推：
+        // JEI 的 CurseForge 下载量 6.47 亿排在 1.31 亿与 1.11 亿之间，
+        // 因此 Modrinth 的权重必须落在 4.94~5.83，取 5 才能复现该排名。
+        // 按源码里写的 7 计算时，Modrinth 第 20 名（0.95亿 x 7 = 6.61亿）
+        // 会压过 JEI 的 6.47 亿，导致前 20 条全部来自 Modrinth。
         static double Weight(ResourceSource source, ResourceType type) => type switch
         {
-            ResourceType.Mod or ResourceType.Modpack => source == ResourceSource.CurseForge ? 1 : 7,
+            ResourceType.Mod or ResourceType.Modpack => source == ResourceSource.CurseForge ? 1 : 5,
             ResourceType.ResourcePack or ResourceType.Shader => source == ResourceSource.CurseForge ? 1 : 5,
             _ => 1
         };
