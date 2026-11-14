@@ -16,6 +16,11 @@ public sealed partial class HomePage : Page
     public HomePage()
     {
         InitializeComponent();
+
+        // ThemeShadow 需要元素带 Z 方向位移才会真正投影，
+        // 否则阴影半径为 0，看起来和没加一样。
+        AvatarHost.Translation = new System.Numerics.Vector3(0, 0, 32);
+
         Loaded += (_, _) => Refresh();
 
         // 版本新增 / 删除 / 重命名后自动刷新，避免界面显示过期数据

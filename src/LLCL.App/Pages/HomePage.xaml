@@ -55,55 +55,70 @@
                           布局：头像占左侧 140px 宽的一整块区域，
                           「启动游戏」与版本说明放在头像右侧，版本选择单独一行且靠左，
                           启动按钮贴右并横向拉长。
+                          底部单独留一行放进度条，紧贴卡片下沿。
                         -->
-                        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="16">
-                            <Grid ColumnSpacing="16" RowSpacing="10">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="140" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
+                        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="0">
+                            <Grid>
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
-                                <!-- 标题与版本说明：位于头像右侧 -->
-                                <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                                    <TextBlock Text="启动游戏" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBlock x:Name="CurrentVersionText"
-                                               Style="{StaticResource SubHeaderTextStyle}" />
-                                </StackPanel>
+                                <Grid Grid.Row="0" Padding="16" ColumnSpacing="16" RowSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
 
-                                <!-- 启动按钮：横向拉长，高度不变 -->
-                                <Button Grid.Column="2" x:Name="LaunchButton" Content="启动"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        Width="220" Height="52" Padding="0"
-                                        CornerRadius="4" FontSize="16" FontWeight="SemiBold"
-                                        VerticalAlignment="Center"
-                                        Click="LaunchButton_Click" />
+                                    <!-- 标题与版本说明：位于头像右侧 -->
+                                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="启动游戏" FontSize="16" FontWeight="SemiBold" />
+                                        <TextBlock x:Name="CurrentVersionText"
+                                                   Style="{StaticResource SubHeaderTextStyle}" />
+                                    </StackPanel>
 
-                                <!-- 版本选择：跨满整行，从卡片最左开始 -->
-                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Spacing="6">
-                                    <ComboBox x:Name="VersionComboBox" HorizontalAlignment="Stretch"
-                                              Header="游戏版本"
-                                              SelectionChanged="VersionComboBox_SelectionChanged" />
+                                    <!-- 启动按钮：横向拉长，高度不变 -->
+                                    <Button Grid.Column="2" x:Name="LaunchButton" Content="启动"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Width="220" Height="52" Padding="0"
+                                            CornerRadius="4" FontSize="16" FontWeight="SemiBold"
+                                            VerticalAlignment="Center"
+                                            Click="LaunchButton_Click" />
 
-                                    <ProgressBar x:Name="LaunchProgress" IsIndeterminate="True" Value="0"
-                                                 Visibility="Collapsed" Height="3" />
-                                    <TextBlock x:Name="LaunchStageText" Visibility="Collapsed"
-                                               Style="{StaticResource SubHeaderTextStyle}"
-                                               TextTrimming="CharacterEllipsis" />
-                                </StackPanel>
+                                    <!-- 版本选择：跨满整行，从卡片最左开始 -->
+                                    <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Spacing="6">
+                                        <ComboBox x:Name="VersionComboBox" HorizontalAlignment="Stretch"
+                                                  Header="游戏版本"
+                                                  SelectionChanged="VersionComboBox_SelectionChanged" />
+
+                                        <TextBlock x:Name="LaunchStageText" Visibility="Collapsed"
+                                                   Style="{StaticResource SubHeaderTextStyle}"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- 进度条紧贴卡片底部：占满宽度，下沿与卡片圆角对齐 -->
+                                <ProgressBar Grid.Row="1" x:Name="LaunchProgress"
+                                             IsIndeterminate="True" Value="0"
+                                             Height="4" CornerRadius="0,0,8,8"
+                                             Visibility="Collapsed" />
                             </Grid>
                         </Border>
 
                         <!-- 头像：无边框，跨两行从顶部开始绘制 -->
-                        <Grid Grid.Row="0" Grid.RowSpan="2"
+                        <Grid x:Name="AvatarHost" Grid.Row="0" Grid.RowSpan="2"
                               Width="140" Height="140"
                               HorizontalAlignment="Left" VerticalAlignment="Top"
                               Margin="16,0,0,0"
                               IsHitTestVisible="False">
+                            <Grid.Shadow>
+                                <ThemeShadow />
+                            </Grid.Shadow>
                             <Image x:Name="AvatarImage" Stretch="Fill" />
                             <Border x:Name="AvatarFallback"
                                     Background="{ThemeResource AccentFillColorDefaultBrush}"
