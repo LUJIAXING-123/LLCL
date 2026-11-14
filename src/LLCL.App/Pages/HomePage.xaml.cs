@@ -57,6 +57,8 @@ public sealed partial class HomePage : Page
             _ => $"离线 · {account.Name}"
         };
 
+        _ = LoadAvatarAsync(account, displayName);
+
         // 使用版本管理器的顺序与自定义显示名
         var entries = VersionManager.ScanAll().Where(e => !e.IsBroken).ToList();
         var versions = entries.Select(e => e.Id).ToList();
@@ -109,8 +111,67 @@ public sealed partial class HomePage : Page
         };
     }
 
-    private void AccountButton_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("settings");
+    /// <summary>
+    /// 加载并合成账号头像。
+    /// 皮肤来自 sessionserver，按 PCL-CE 的坐标裁出脸层与帽子层再叠放。
+    /// 离线账号或取不到皮肤时显示首字母占位。
+    /// </summary>
+    private async Task LoadAvatarAsync(AccountEntry? account, string displayName)
+    {
+        try
+        {
+            if (account is null || string.IsNullOrWhiteSpace(account.Uuid))
+            {
+                ShowAvatarFallback(displayName);
+                return;
+            }
 
+            // 第三方皮肤站使用账号登录时记录的 Yggdrasil 地址
+            var yggdrasil = account.Kind == AccountKind.ThirdParty ? account.ServerUrl : null;
+
+            var skin = await MinecraftSkin.GetSkinAsync(account.Uuid, yggdrasil);
+            if (skin is null)
+            {
+                ShowAvatarFallback(displayName);
+                return;
+            }
+
+            var head = await SkinHeadRenderer.RenderAsync(skin);
+            if (head is null)
+            {
+                ShowAvatarFallback(displayName);
+                return;
+            }
+
+            Dispatch(() =>
+            {
+                AvatarImage.Source = head;
+                AvatarImage.Visibility = Visibility.Visible;
+                AvatarFallback.Visibility = Visibility.Collapsed;
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"加载头像失败: {ex.Message}");
+            ShowAvatarFallback(displayName);
+        }
+    }
+
+    private void ShowAvatarFallback(string displayName)
+    {
+        var initial = string.IsNullOrWhiteSpace(displayName)
+            ? "?"
+            : displayName[..1].ToUpperInvariant();
+
+        Dispatch(() =>
+        {
+            AvatarInitial.Text = initial;
+            AvatarImage.Visibility = Visibility.Collapsed;
+            AvatarFallback.Visibility = Visibility.Visible;
+        });
+    }
+
+    private void AccountButton_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("settings");
     private void VersionComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressSelection) return;
