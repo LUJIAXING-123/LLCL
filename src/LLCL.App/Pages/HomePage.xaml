@@ -52,24 +52,39 @@
                         </Grid.RowDefinitions>
 
                         <!--
-                          上内边距 56px：头像落在卡片内的部分高 47px，
-                          再留 9px 间隙，让正文从头像下方开始。
-                          其余三边保持 16px，内容贴左，不留空列。
+                          布局：头像占左侧 140px 宽的一整块区域，
+                          「启动游戏」与版本说明放在头像右侧，版本选择单独一行且靠左，
+                          启动按钮贴右并横向拉长。
                         -->
-                        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="16,56,16,16">
-                            <Grid ColumnSpacing="16">
+                        <Border Grid.Row="1" Style="{StaticResource CardStyle}" Padding="16">
+                            <Grid ColumnSpacing="16" RowSpacing="10">
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="140" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
 
-                                <StackPanel Spacing="8" VerticalAlignment="Center">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Text="启动游戏" FontSize="16" FontWeight="SemiBold" />
-                                        <TextBlock x:Name="CurrentVersionText"
-                                                   Style="{StaticResource SubHeaderTextStyle}" />
-                                    </StackPanel>
+                                <!-- 标题与版本说明：位于头像右侧 -->
+                                <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                    <TextBlock Text="启动游戏" FontSize="16" FontWeight="SemiBold" />
+                                    <TextBlock x:Name="CurrentVersionText"
+                                               Style="{StaticResource SubHeaderTextStyle}" />
+                                </StackPanel>
 
+                                <!-- 启动按钮：横向拉长，高度不变 -->
+                                <Button Grid.Column="2" x:Name="LaunchButton" Content="启动"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Width="220" Height="52" Padding="0"
+                                        CornerRadius="4" FontSize="16" FontWeight="SemiBold"
+                                        VerticalAlignment="Center"
+                                        Click="LaunchButton_Click" />
+
+                                <!-- 版本选择：跨满整行，从卡片最左开始 -->
+                                <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Spacing="6">
                                     <ComboBox x:Name="VersionComboBox" HorizontalAlignment="Stretch"
                                               Header="游戏版本"
                                               SelectionChanged="VersionComboBox_SelectionChanged" />
@@ -80,14 +95,6 @@
                                                Style="{StaticResource SubHeaderTextStyle}"
                                                TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
-
-                                <!-- 启动按钮：宽度与头像边长一致，样式对齐微软商店 -->
-                                <Button Grid.Column="1" x:Name="LaunchButton" Content="启动"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        Width="140" Height="52" Padding="0"
-                                        CornerRadius="4" FontSize="16" FontWeight="SemiBold"
-                                        VerticalAlignment="Center"
-                                        Click="LaunchButton_Click" />
                             </Grid>
                         </Border>
 
@@ -95,7 +102,7 @@
                         <Grid Grid.Row="0" Grid.RowSpan="2"
                               Width="140" Height="140"
                               HorizontalAlignment="Left" VerticalAlignment="Top"
-                              Margin="20,0,0,0"
+                              Margin="16,0,0,0"
                               IsHitTestVisible="False">
                             <Image x:Name="AvatarImage" Stretch="Fill" />
                             <Border x:Name="AvatarFallback"
