@@ -225,6 +225,20 @@ public sealed class GameLauncher
                    ?? Account.MicrosoftAuth.TryReadXuid(options.Account.AccessToken)
                    ?? "0";
 
+        // 版本的发布类型应该反映真实值（release / snapshot / old_beta 等）。
+        // 一律写死成 release 会让快照版在游戏里被当成正式版，
+        // 部分按版本类型做兼容判断的模组会因此走错分支。
+        var versionType = "release";
+        try
+        {
+            var loaded = VersionLoader.Load(versionId);
+            if (!string.IsNullOrWhiteSpace(loaded.Type)) versionType = loaded.Type;
+        }
+        catch
+        {
+            // 读不到就用默认值，不影响启动
+        }
+
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["auth_player_name"] = options.Account.Name,
@@ -237,7 +251,7 @@ public sealed class GameLauncher
             ["assets_root"] = Paths.AssetsDir,
             ["assets_index_name"] = assetIndexId,
             ["version_name"] = versionId,
-            ["version_type"] = "release",
+            ["version_type"] = versionType,
             ["game_assets"] = Path.Combine(Paths.AssetsDir, "virtual", "legacy"),
             ["natives_directory"] = Path.Combine(Paths.VersionsDir, rootId, "natives"),
             ["launcher_name"] = "LLCL",

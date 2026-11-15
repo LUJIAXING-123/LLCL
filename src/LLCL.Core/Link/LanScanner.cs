@@ -93,6 +93,20 @@ public sealed class LanScanner : IDisposable
     private void _HandleBroadcast(string message)
     {
         var motd = _ExtractTag(message, "MOTD");
+
+        // 兼容旧版广播：早期实现会在名称外再套一层 @|...|@，
+        // 这类标记会原样出现在游戏列表里，解析时顺手剥掉。
+        if (motd is not null)
+        {
+            motd = motd.Trim();
+            if (motd.StartsWith("@|", StringComparison.Ordinal) &&
+                motd.EndsWith("|@", StringComparison.Ordinal) &&
+                motd.Length >= 4)
+            {
+                motd = motd[2..^2];
+            }
+        }
+
         var ad = _ExtractTag(message, "AD");
         if (ad is null) return;
 

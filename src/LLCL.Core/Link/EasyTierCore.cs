@@ -293,7 +293,7 @@ public sealed class EasyTierCore : IDisposable
 
         if (isHost)
         {
-            // 房主固定使用房间码生成的虚拟 IP，加入端自动分配，避免冲突。
+            // 房主固定使用房间码生成的虚拟 IP，加入端按机器派生，避免冲突。
             // 旧参数 --i 已移除，正确写法是 --ipv4。
             args.Add("--ipv4");
             args.Add(RoomCode.HostIp);
@@ -304,10 +304,20 @@ public sealed class EasyTierCore : IDisposable
         }
         else
         {
+            // 加入方同样必须指定虚拟 IP。
+            // 无 TUN 模式下缺了这个参数，节点会退化成「纯转发」：
+            // port-forward 规则虽然能加成功、本地端口也在监听，
+            // 但真正建立连接时会被对端重置，表现为「已加入房间却连不上」。
+            args.Add("--ipv4");
+            args.Add(RoomCode.JoinerIp(GetMachineId()));
+
+            // 加入方要访问房主的游戏端口，端口可能落在任意值上，
+            // 因此放通全部端口。早先写的 "0" 并非合法端口，
+            // 白名单语义上应当写单个端口或范围。
             args.Add("--tcp-whitelist");
-            args.Add("0");
+            args.Add("1-65535");
             args.Add("--udp-whitelist");
-            args.Add("0");
+            args.Add("1-65535");
         }
 
         // 监听端口改为随机分配。
@@ -592,8 +602,7 @@ public sealed class EasyTierCore : IDisposable
     private static string _Quote(string arg)
         => arg.Any(c => c is ' ' or '"') ? "\"" + arg.Replace("\"", "\\\"") + "\"" : arg;
 
-    private static string GetMachineId()
-    {
+    private static string GetMachineId()    {
         try
         {
             var file = Path.Combine(Paths.DataRoot, "machine.id");
@@ -614,6 +623,59 @@ public sealed class EasyTierCore : IDisposable
         }
     }
 
+    /// <summary>
+    /// 清理上次运行遗留的内核进程。
+    /// <para>
+    /// 正常关闭会走 LeaveAsync 停掉内核，但启动器被任务管理器强杀、
+    /// 或自身崩溃时没有机会清理，内核会一直留在房间里占着网络名。
+    /// 下次启动时按可执行文件路径判断归属，只结束确实来自本安装目录的进程。
+    /// </para>
+    /// </summary>
+    public static int CleanupOrphanProcesses()
+    {
+        var killed = 0;
+
+        try
+        {
+            // 以 EasyTier 的整个安装根目录判断归属，覆盖各版本子目录，
+            // 避免只清理当前版本而漏掉旧版本的内核。
+            var dir = Path.GetFullPath(Paths.EasyTierDir);
+
+            foreach (var process in System.Diagnostics.Process.GetProcessesByName("easytier-core"))
+            {
+                try
+                {
+                    var path = process.MainModule?.FileName;
+                    if (string.IsNullOrEmpty(path)) continue;
+
+                    // 只处理本安装目录下的内核，避免误杀用户自己的 EasyTier
+                    if (!Path.GetFullPath(path).StartsWith(dir, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    process.Kill(true);
+                    process.WaitForExit(3000);
+                    killed++;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Debug($"清理残留内核 {process.Id} 失败: {ex.Message}");
+                }
+                finally
+                {
+                    process.Dispose();
+                }
+            }
+
+            if (killed > 0) Logger.Info($"已清理 {killed} 个残留的联机内核进程");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"清理残留内核时出错: {ex.Message}");
+        }
+
+        return killed;
+    }
+
     /// <summary>查询在线成员。返回解析后的 peer 列表。</summary>
     public async Task<List<PeerInfo>> GetPeersAsync(CancellationToken ct = default)
     {
@@ -621,6 +683,13 @@ public sealed class EasyTierCore : IDisposable
 
         var cliExe = Path.Combine(InstallDir, "easytier-cli.exe");
         if (!File.Exists(cliExe)) return [];
+
+        // 这是每两秒跑一次的高频轮询，必须自带超时。
+        // 一旦 RPC 卡住，没有超时就会不断堆积 easytier-cli 子进程，
+        // 挂机久了会拖慢整机并让联机状态彻底不动。
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
+        var token = timeoutCts.Token;
 
         try
         {
@@ -640,9 +709,9 @@ public sealed class EasyTierCore : IDisposable
             using var cli = Process.Start(psi);
             if (cli is null) return [];
 
-            var output = await cli.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
-            var err = await cli.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
-            await cli.WaitForExitAsync(ct).ConfigureAwait(false);
+            var output = await cli.StandardOutput.ReadToEndAsync(token).ConfigureAwait(false);
+            var err = await cli.StandardError.ReadToEndAsync(token).ConfigureAwait(false);
+            await cli.WaitForExitAsync(token).ConfigureAwait(false);
 
             var json = output.Trim();
             if (json.Length == 0) json = err.Trim();
@@ -655,6 +724,12 @@ public sealed class EasyTierCore : IDisposable
             var peers = JsonSerializer.Deserialize<List<PeerInfo>>(json[start..(end + 1)],
                 LauncherConfig.JsonOptions) ?? [];
             return peers;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // 只是这一轮超时，不当作错误刷日志
+            Logger.Debug("查询成员列表超时，跳过本轮");
+            return [];
         }
         catch (Exception ex)
         {

@@ -22,6 +22,38 @@ public sealed record RoomCode(string FullCode, string NetworkName, string Networ
     /// <summary>主机在虚拟网络中的固定 IPv4。</summary>
     public const string HostIp = "10.114.51.41";
 
+    /// <summary>
+    /// 为加入方派生一个稳定的虚拟 IPv4。
+    /// <para>
+    /// 无 TUN 模式下，端口转发是「本节点主动连向虚拟网内的目标」，
+    /// 数据面必须知道本节点自己的虚拟地址，否则握手会被对端重置。
+    /// 若完全不给 <c>--ipv4</c>，EasyTier 会把这个节点当成纯转发节点，
+    /// 日志里表现为 port-forward 规则添加成功、本地端口也在监听，
+    /// 但真正连接时立刻断开。
+    /// </para>
+    /// <para>
+    /// 地址按 machine.id 派生，同一台机器每次启动都得到同一个地址，
+    /// 重启后房间内成员不会因为地址变化而掉线。
+    /// 取值避开房主的 .41，范围 42–254。
+    /// </para>
+    /// </summary>
+    public static string JoinerIp(string machineId)
+    {
+        if (string.IsNullOrWhiteSpace(machineId)) machineId = "llcl";
+
+        // FNV-1a：稳定、无依赖，跨进程一致
+        var hash = 2166136261u;
+        foreach (var c in machineId)
+        {
+            hash ^= c;
+            hash *= 16777619u;
+        }
+
+        // 213 个可用地址（42..254），与房主的 41 错开
+        var lastOctet = 42 + (int)(hash % 213);
+        return $"10.114.51.{lastOctet}";
+    }
+
     /// <summary>默认的被联机世界端口。</summary>
     public const int DefaultPort = 25565;
 
@@ -35,8 +67,16 @@ public sealed record RoomCode(string FullCode, string NetworkName, string Networ
     private const int GroupSize = 5;
     private const int ChecksumChars = 2;
 
-    /// <summary>可接受的最短输入长度（允许省略校验位）。</summary>
-    public const int MinInputLength = PayloadLength;
+    /// <summary>
+    /// 可接受的最短输入长度。
+    /// <para>
+    /// 与完整长度一致：房间码总会生成校验位，因此不存在“合法的 25 位码”。
+    /// 允许省略校验位时，任何一个字符输错都不会被本地发现，
+    /// 只能等连接超时后才报“未能连接”，排错体验很差；
+    /// 强制校验可以立刻指出输错。
+    /// </para>
+    /// </summary>
+    public const int MinInputLength = PayloadLength + ChecksumChars;
 
     /// <summary>标准输入长度（含校验位）。</summary>
     public const int FullInputLength = PayloadLength + ChecksumChars;
@@ -53,12 +93,16 @@ public sealed record RoomCode(string FullCode, string NetworkName, string Networ
             port = DefaultPort;
 
         var nameBits = _RandomBits(60);
-        var secretBits = _RandomBits(32);
+
+        // 密钥段占 8 个字符 = 40 bit 空间，直接用满 40 bit 随机数。
+        // 早先取 32 bit 再左移 9 位对齐，最高位会超出 40 bit 被截断，
+        // 实际只剩 31 bit 有效熵，且低位恒为 0，新码的末尾字符永远是同一个。
+        var secretBits = _RandomBits(40);
 
         var payload = string.Concat(
             _Encode(nameBits, NameChars),
-            _Encode(secretBits << 9, SecretChars),   // 40 bit 空间，取高位对齐
-            _Encode((ulong)port << 9, PortChars));   // 25 bit 空间
+            _Encode(secretBits, SecretChars),
+            _Encode((ulong)port << 9, PortChars));   // 25 bit 空间，低 9 位留空
 
         return _Build(payload, port);
     }
@@ -105,7 +149,10 @@ public sealed record RoomCode(string FullCode, string NetworkName, string Networ
 
         if (cleaned.Length < MinInputLength)
         {
-            error = $"房间码长度不足（当前 {cleaned.Length} 位，至少需要 {MinInputLength} 位），可能少输入了一段。";
+            error = cleaned.Length == PayloadLength
+                ? $"房间码少了一段校验位（当前 {cleaned.Length} 位，完整应为 {FullInputLength} 位），" +
+                  "请向房主索取完整的房间码。"
+                : $"房间码长度不足（当前 {cleaned.Length} 位，应为 {FullInputLength} 位），可能少输入了一段。";
             return null;
         }
 
@@ -117,16 +164,14 @@ public sealed record RoomCode(string FullCode, string NetworkName, string Networ
 
         var payload = cleaned.ToString(0, PayloadLength);
 
-        // 若用户提供了校验位，做一次完整性校验
-        if (cleaned.Length == FullInputLength)
+        // 校验位现在必定存在，任何一位输错都会在这里被拦下，
+        // 不必等到连接超时才发现。
+        var expected = _Checksum(payload);
+        var actual = cleaned.ToString(PayloadLength, ChecksumChars);
+        if (!string.Equals(expected, actual, StringComparison.Ordinal))
         {
-            var expected = _Checksum(payload);
-            var actual = cleaned.ToString(PayloadLength, ChecksumChars);
-            if (!string.Equals(expected, actual, StringComparison.Ordinal))
-            {
-                error = "房间码校验失败，可能存在个别字符输错，请核对后重试。";
-                return null;
-            }
+            error = "房间码校验失败，可能存在个别字符输错，请核对后重试。";
+            return null;
         }
 
         var encodedPort = (int)(_Decode(payload.AsSpan(NameChars + SecretChars, PortChars)) >> 9);

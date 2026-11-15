@@ -412,16 +412,34 @@ public sealed class LinkService : IAsyncDisposable
 
     #region 状态刷新
 
+    /// <summary>轮询是否正在执行，用于防止上一轮未结束时重入。</summary>
+    private int _peerPolling;
+
     private void _StartPeerTimer()
     {
         _peerTimer = new Timer(async _ =>
         {
             if (State != LinkState.Connected) return;
 
-            var peers = await _core.GetPeersAsync().ConfigureAwait(false);
-            _lastPeers = peers;
-            OnPeersUpdated?.Invoke(peers);
-            _RefreshStatus(peers);
+            // 单飞：定时器两秒触发一次，但一次查询可能因为 RPC 变慢而超过两秒。
+            // 没有这个标记就会不断叠加并发查询，越积越多。
+            if (Interlocked.Exchange(ref _peerPolling, 1) == 1) return;
+
+            try
+            {
+                var peers = await _core.GetPeersAsync().ConfigureAwait(false);
+                _lastPeers = peers;
+                OnPeersUpdated?.Invoke(peers);
+                _RefreshStatus(peers);
+            }
+            catch (Exception ex)
+            {
+                Logger.Debug($"刷新成员状态失败: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _peerPolling, 0);
+            }
         }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2));
     }
 
@@ -437,20 +455,33 @@ public sealed class LinkService : IAsyncDisposable
 
     private void _RefreshStatus(List<PeerInfo> peers)
     {
+        // peer 列表里包含本节点自己（cost 为 Local），
+        // 直接拿它判断连接方式会把房主永远显示成「局域网直连」。
+        var self = peers.FirstOrDefault(p => _ClassifyCost(p) == RelayStatus.Local);
         var host = peers.FirstOrDefault(p => p.IsHost);
+
+        // 加入方关心的是「我到房主怎么连的」；
+        // 房主则是「其他人到我怎么连的」，取其中最优的一条代表整体状态。
+        PeerInfo? reference;
+        if (IsHost)
+        {
+            reference = peers
+                .Where(p => !ReferenceEquals(p, self) && !p.IsHost)
+                .OrderBy(p => _CostRank(_ClassifyCost(p)))
+                .FirstOrDefault();
+        }
+        else
+        {
+            reference = host ?? peers.FirstOrDefault(p => !ReferenceEquals(p, self));
+        }
+
         var players = peers.Select(p => p.DisplayName).Where(n => n.Length > 0).ToList();
 
-        // 延迟：优先房主节点的 ping
-        var ping = 0.0;
-        if (host is not null) ping = _ParsePing(host.Ping);
-        else if (peers.Count > 0) ping = _ParsePing(peers[0].Ping);
+        var ping = reference is not null ? _ParsePing(reference.Ping) : 0.0;
 
-        // 中继状态：根据 cost 字段判断 P2P / relay / local
-        var relayState = host is not null
-            ? _ClassifyCost(host)
-            : RelayStatus.Unknown;
-
-        var localPeer = peers.FirstOrDefault(p => _ClassifyCost(p) == RelayStatus.Local);
+        var relayState = reference is not null
+            ? _ClassifyCost(reference)
+            : RelayStatus.Local; // 房主独自在线时就是这么个状态
 
         var relayNode = LauncherConfig.Current.EasyTierRelay;
 
@@ -459,8 +490,12 @@ public sealed class LinkService : IAsyncDisposable
             State = State,
             IsHost = IsHost,
             RoomCode = CurrentRoomCode,
-            VirtualIp = IsHost ? RoomCode.HostIp : host?.Ipv4,
-            LocalVirtualIp = localPeer?.Ipv4,
+            // 自己的虚拟地址：房主固定在房间码里，加入方按机器派生。
+            // 修复前加入方不带 --ipv4，这里取到的是空值。
+            VirtualIp = IsHost
+                ? RoomCode.HostIp
+                : string.IsNullOrWhiteSpace(self?.Ipv4) ? null : self.Ipv4,
+            LocalVirtualIp = string.IsNullOrWhiteSpace(self?.Ipv4) ? null : self.Ipv4,
             Relay = relayNode,
             RelayState = relayState,
             Ping = ping,
@@ -481,6 +516,16 @@ public sealed class LinkService : IAsyncDisposable
         if (cost.Contains("p2p", StringComparison.OrdinalIgnoreCase)) return RelayStatus.Direct;
         return RelayStatus.Unknown;
     }
+
+    /// <summary>连接方式的优劣排序，越小越好。</summary>
+    private static int _CostRank(RelayStatus status) => status switch
+    {
+        RelayStatus.Direct => 0,
+        RelayStatus.Relay => 1,
+        RelayStatus.Local => 2,
+        RelayStatus.Unknown => 3,
+        _ => 4
+    };
 
     private static double _ParsePing(string? ping) =>
         double.TryParse(ping?.Replace("%", string.Empty), out var value) ? value : 0;

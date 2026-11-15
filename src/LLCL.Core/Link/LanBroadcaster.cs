@@ -48,7 +48,10 @@ public sealed class LanBroadcaster : IDisposable
         if (_client is null) return;
         try
         {
-            var payload = Encoding.UTF8.GetBytes($"[MOTD]@|{_motd}|@[/MOTD][AD]{_worldPort}[/AD]");
+            // 标准局域网广播格式：[MOTD]名称[/MOTD][AD]端口[/AD]。
+            // 不要在名称外再套 @|...|@ 之类的标记：游戏会把它们
+            // 原样显示在多人游戏列表里，看起来像乱码。
+            var payload = Encoding.UTF8.GetBytes($"[MOTD]{_motd}[/MOTD][AD]{_worldPort}[/AD]");
             _client.Send(payload, payload.Length, new IPEndPoint(Destination, Port));
         }
         catch (Exception ex)

@@ -28,6 +28,10 @@ public static class AppServices
         {
             try
             {
+                // 先把上次异常退出遗留的内核清掉：
+                // 残留进程会占用网络名，让本次加入房间变成「幽灵成员」。
+                EasyTierCore.CleanupOrphanProcesses();
+
                 var version = await LinkService.Instance.PrepareAsync().ConfigureAwait(false);
                 if (version is not null)
                     Logger.Info($"联机内核已就绪: EasyTier {version}");
