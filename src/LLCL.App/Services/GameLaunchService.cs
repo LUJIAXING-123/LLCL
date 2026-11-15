@@ -246,6 +246,11 @@ public static class GameLaunchService
             AccountKind.Offline => LaunchAccount.Offline(account.Name),
             _ => new LaunchAccount(account.Name, account.Uuid, account.AccessToken,
                 account.Kind == AccountKind.Microsoft ? "microsoft" : "thirdparty")
+            {
+                // 正版账号必须带上 XUID，否则游戏不认为具备正版身份，
+                // Realms 加载失败、部分正版服务器拒绝进入。
+                Xuid = account.Xuid
+            }
         };
     }
 

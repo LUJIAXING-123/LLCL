@@ -28,6 +28,12 @@ public sealed record LaunchAccount(string Name, string Uuid, string AccessToken,
     public bool IsMicrosoft => Type == "microsoft";
     public string UuidUndashed => Uuid.Replace("-", string.Empty);
 
+    /// <summary>
+    /// 微软账号的 XUID。Realms 与部分正版服务器靠它识别玩家，
+    /// 为 null 时会尝试从访问令牌里解析。
+    /// </summary>
+    public string? Xuid { get; init; }
+
     public static LaunchAccount Offline(string name)
     {
         var a = OfflineAccount.Create(name);
@@ -94,7 +100,10 @@ public sealed class GameLauncher
 
         var args = new List<string> { "-XX:+UnlockExperimentalVMOptions" };
         if (options.MaxMemoryMb > 0) args.Add($"-Xmx{options.MaxMemoryMb}m");
-        args.Add($"-Xmn{Math.Max(128, options.MinMemoryMb)}m");
+        // 用户设置的“最小内存”应映射到初始堆 -Xms。
+        // 之前误写成 -Xmn（新生代大小），语义完全不同：
+        // 设成最小内存只是一个偏小的新生代，设得和最大内存一样则挤压老年代。
+        args.Add($"-Xms{Math.Max(128, options.MinMemoryMb)}m");
         args.Add("-Dfile.encoding=UTF-8");
         args.Add($"-Djava.library.path={Path.Combine(Paths.VersionsDir, rootId, "natives")}");
         args.Add("-Dminecraft.launcher.brand=LLCL");
@@ -209,6 +218,13 @@ public sealed class GameLauncher
     private static Dictionary<string, string> BuildPlaceholders(string versionId, string gameDir,
         LaunchOptions options, string rootId, string assetIndexId)
     {
+        // XUID 是正版身份的组成部分，Realms 与部分正版服务器据此识别玩家。
+        // 之前写死成 0，游戏会认为账号没有 XUID，导致 Realms 无法加载。
+        // 优先用登录时解析并保存的值，老账号没有记录时再从令牌现解一次。
+        var xuid = options.Account.Xuid
+                   ?? Account.MicrosoftAuth.TryReadXuid(options.Account.AccessToken)
+                   ?? "0";
+
         return new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["auth_player_name"] = options.Account.Name,
@@ -228,10 +244,14 @@ public sealed class GameLauncher
             ["launcher_version"] = "3.0",
             ["classpath"] = BuildClassPath(LoadChain(versionId)),
             ["library_directory"] = Paths.LibrariesDir,
-            ["classpath_separator"] = Path.DirectorySeparatorChar.ToString(),
+            // Windows 的 classpath 分隔符必须是分号。
+            // 用 Path.DirectorySeparatorChar 会得到反斜杠，一旦某个版本真的用到
+            // classpath_separator 占位符，拼出来的 classpath 会整段失效。
+            ["library_directory_separator"] = ";",
+            ["classpath_separator"] = ";",
             ["primary_jar"] = Path.Combine(Paths.VersionsDir, rootId, rootId + ".jar"),
             ["clientid"] = "LLCL",
-            ["auth_xuid"] = "0",
+            ["auth_xuid"] = xuid,
             ["resolution_width"] = options.Width.ToString(),
             ["resolution_height"] = options.Height.ToString()
         };

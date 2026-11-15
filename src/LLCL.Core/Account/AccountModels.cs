@@ -32,6 +32,16 @@ public sealed class AccountEntry
     /// <summary>微软账号的刷新令牌，用于长期免登录。</summary>
     public string? RefreshToken { get; set; }
 
+    /// <summary>
+    /// 微软账号的 Xbox 用户 ID（XUID）。
+    /// <para>
+    /// 正版服务器与 Realms 都要用它识别玩家身份，
+    /// 缺失时游戏会退化为“无 xuid”状态，Realms 无法加载。
+    /// 该值可从 Minecraft 访问令牌的 JWT 载荷里解出。
+    /// </para>
+    /// </summary>
+    public string? Xuid { get; set; }
+
     /// <summary>第三方账号的验证服务器地址（authlib-injector 服务端）。</summary>
     public string? ServerUrl { get; set; }
 

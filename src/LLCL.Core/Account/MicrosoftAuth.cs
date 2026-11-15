@@ -401,6 +401,12 @@ public static class MicrosoftAuth
         var uuid = profile["id"]?.GetValue<string>()
                    ?? throw new AuthException("无法读取游戏档案");
 
+        // XUID 只存在于访问令牌的载荷里，接口不会单独返回。
+        // 缺少它游戏无法识别正版身份，Realms 与部分正版服务器会拒绝。
+        var xuid = TryReadXuid(mcToken);
+        if (xuid is null)
+            Logger.Warn("[认证] 未能从访问令牌解析出 XUID，Realms 可能不可用");
+
         return new AccountEntry
         {
             Kind = AccountKind.Microsoft,
@@ -408,8 +414,47 @@ public static class MicrosoftAuth
             Uuid = uuid,
             AccessToken = mcToken,
             RefreshToken = refreshToken,
+            Xuid = xuid,
             ExpiresAt = DateTime.Now.AddHours(24)
         };
+    }
+
+    /// <summary>
+    /// 从 Minecraft 访问令牌（JWT）的载荷里取出 XUID。
+    /// 解析失败返回 null，不抛异常——缺 XUID 只影响 Realms，不该阻断登录。
+    /// </summary>
+    public static string? TryReadXuid(string? accessToken)
+    {
+        if (string.IsNullOrWhiteSpace(accessToken)) return null;
+
+        try
+        {
+            var parts = accessToken.Split('.');
+            if (parts.Length < 2) return null;
+
+            // JWT 用 Base64Url，需要补齐填充字符
+            var payload = parts[1].Replace('-', '+').Replace('_', '/');
+            payload = (payload.Length % 4) switch
+            {
+                2 => payload + "==",
+                3 => payload + "=",
+                0 => payload,
+                _ => string.Empty
+            };
+
+            if (payload.Length == 0) return null;
+
+            var json = JsonNode.Parse(System.Text.Encoding.UTF8.GetString(
+                Convert.FromBase64String(payload))) as JsonObject;
+            var xuid = json?["xuid"]?.GetValue<string>();
+
+            return string.IsNullOrWhiteSpace(xuid) ? null : xuid;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"[认证] 解析 XUID 失败: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>带状态码的 POST，便于区分认证失败与网络故障。</summary>
