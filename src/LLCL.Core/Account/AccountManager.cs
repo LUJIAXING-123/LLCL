@@ -119,9 +119,18 @@ public static class AccountManager
     {
         if (account.Kind == AccountKind.Offline) return account;
 
-        if (!account.IsExpired) return account;
+        // 微软账号除了看是否过期，还要确认令牌真的绑定了本档案。
+        // 缺少 profiles.mc 的令牌能通过 profile 接口，但调 sessionserver 的 join
+        // 会返回 403 Profile not found，表现为连不上任何正版服务器。
+        // 这类令牌必须作废重签，否则会一直卡在有效期里无法自愈。
+        var brokenBinding = account.Kind == AccountKind.Microsoft &&
+                            !MicrosoftAuth.HasProfileBinding(account.AccessToken, account.Uuid);
 
-        Logger.Info($"账号 {account.Name} 令牌已过期，尝试自动续期");
+        if (!account.IsExpired && !brokenBinding) return account;
+
+        Logger.Info(brokenBinding
+            ? $"账号 {account.Name} 的令牌缺少档案绑定，重新签发"
+            : $"账号 {account.Name} 令牌已过期，尝试自动续期");
 
         var refreshed = account.Kind switch
         {

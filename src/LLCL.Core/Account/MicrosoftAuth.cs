@@ -420,10 +420,9 @@ public static class MicrosoftAuth
     }
 
     /// <summary>
-    /// 从 Minecraft 访问令牌（JWT）的载荷里取出 XUID。
-    /// 解析失败返回 null，不抛异常——缺 XUID 只影响 Realms，不该阻断登录。
+    /// 解析访问令牌（JWT）的载荷。失败返回 null，不抛异常。
     /// </summary>
-    public static string? TryReadXuid(string? accessToken)
+    public static JsonObject? ReadClaims(string? accessToken)
     {
         if (string.IsNullOrWhiteSpace(accessToken)) return null;
 
@@ -444,17 +443,66 @@ public static class MicrosoftAuth
 
             if (payload.Length == 0) return null;
 
-            var json = JsonNode.Parse(System.Text.Encoding.UTF8.GetString(
+            return JsonNode.Parse(System.Text.Encoding.UTF8.GetString(
                 Convert.FromBase64String(payload))) as JsonObject;
-            var xuid = json?["xuid"]?.GetValue<string>();
-
-            return string.IsNullOrWhiteSpace(xuid) ? null : xuid;
         }
         catch (Exception ex)
         {
-            Logger.Warn($"[认证] 解析 XUID 失败: {ex.Message}");
+            Logger.Warn($"[认证] 解析访问令牌失败: {ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// 从 Minecraft 访问令牌里取出 XUID。
+    /// 解析失败返回 null，不抛异常——缺 XUID 只影响 Realms，不该阻断登录。
+    /// </summary>
+    public static string? TryReadXuid(string? accessToken)
+    {
+        var json = ReadClaims(accessToken);
+        var xuid = json?["xuid"]?.GetValue<string>();
+
+        return string.IsNullOrWhiteSpace(xuid) ? null : xuid;
+    }
+
+    /// <summary>
+    /// 判断令牌是否真的绑定了指定档案。
+    /// <para>
+    /// 有些令牌虽然能通过 profile 接口，但载荷里缺少 <c>profiles.mc</c> 绑定，
+    /// 拿去调 sessionserver 的 join 会直接返回
+    /// 403 ForbiddenOperationException: Profile not found，
+    /// 表现就是连不上任何正版服务器。
+    /// 这种令牌必须重新签发，不能因为没过期就继续复用。
+    /// </para>
+    /// </summary>
+    public static bool HasProfileBinding(string? accessToken, string? uuid)
+    {
+        var json = ReadClaims(accessToken);
+        if (json is null) return false;
+
+        var normalized = (uuid ?? string.Empty).Replace("-", string.Empty).ToLowerInvariant();
+        if (normalized.Length == 0) return false;
+
+        // 新式令牌带 profiles.mc
+        var bound = json["profiles"]?["mc"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(bound))
+            return string.Equals(bound.Replace("-", string.Empty), normalized,
+                StringComparison.OrdinalIgnoreCase);
+
+        // 有些令牌把档案放在 pfd 数组里
+        if (json["pfd"] is JsonArray pfd)
+        {
+            foreach (var item in pfd)
+            {
+                var id = item?["id"]?.GetValue<string>();
+                if (!string.IsNullOrWhiteSpace(id) &&
+                    string.Equals(id.Replace("-", string.Empty), normalized,
+                        StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>带状态码的 POST，便于区分认证失败与网络故障。</summary>
@@ -497,44 +545,76 @@ public static class MicrosoftAuth
     private static async Task<JsonNode?> _PostJsonAsync(string url, JsonObject payload,
         CancellationToken ct, bool xboxContract = false)
     {
-        try
+        // Xbox 认证域名在部分网络下首连很慢，HttpClient 的连接超时是 8 秒，
+        // 偶发会以「The operation was canceled」直接失败。
+        // 认证链路一旦中断就只能让用户重新登录，代价太高，因此这里重试。
+        const int attempts = 3;
+
+        for (var attempt = 1; attempt <= attempts; attempt++)
         {
-            using var req = new HttpRequestMessage(HttpMethod.Post, url)
-            {
-                Content = new StringContent(payload.ToJsonString(),
-                    System.Text.Encoding.UTF8, "application/json")
-            };
+            ct.ThrowIfCancellationRequested();
 
-            if (xboxContract)
+            try
             {
-                req.Headers.Add("x-xbl-contract-version", "1");
-                req.Headers.Accept.ParseAdd("application/json");
+                using var req = new HttpRequestMessage(HttpMethod.Post, url)
+                {
+                    Content = new StringContent(payload.ToJsonString(),
+                        System.Text.Encoding.UTF8, "application/json")
+                };
+
+                if (xboxContract)
+                {
+                    req.Headers.Add("x-xbl-contract-version", "1");
+                    req.Headers.Accept.ParseAdd("application/json");
+                }
+
+                using var resp = await Net.Http.Client.SendAsync(req, ct).ConfigureAwait(false);
+
+                var status = (int)resp.StatusCode;
+                var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+                if (body.Length == 0)
+                {
+                    Logger.Warn($"{url} 返回空响应（HTTP {status}）");
+                    return null;
+                }
+
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Logger.Warn($"{url} 返回 HTTP {status}：{body[..Math.Min(250, body.Length)]}");
+
+                    // 4xx 是请求本身的问题，重试没有意义
+                    if (status is >= 400 and < 500) return null;
+
+                    continue;
+                }
+
+                return JsonNode.Parse(body);
             }
-
-            using var resp = await Net.Http.Client.SendAsync(req, ct).ConfigureAwait(false);
-
-            var status = (int)resp.StatusCode;
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-
-            if (body.Length == 0)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                Logger.Warn($"{url} 返回空响应（HTTP {status}）");
-                return null;
+                throw;
             }
-
-            if (!resp.IsSuccessStatusCode)
+            catch (Exception ex)
             {
-                Logger.Warn($"{url} 返回 HTTP {status}：{body[..Math.Min(250, body.Length)]}");
-                return null;
-            }
+                Logger.Warn($"请求 {url} 失败（第 {attempt}/{attempts} 次）: {ex.Message}");
 
-            return JsonNode.Parse(body);
+                if (attempt == attempts) return null;
+
+                // 退避一下再试，避开瞬时拥塞
+                try
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(400 * attempt), ct)
+                        .ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return null;
+                }
+            }
         }
-        catch (Exception ex)
-        {
-            Logger.Warn($"请求 {url} 失败: {ex.Message}");
-            return null;
-        }
+
+        return null;
     }
 
     /// <summary>带状态码的 GET 请求，用于区分「未购买」和「网络故障」。</summary>
