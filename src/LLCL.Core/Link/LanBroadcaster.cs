@@ -31,6 +31,16 @@ public sealed class LanBroadcaster : IDisposable
             _client = new UdpClient(new IPEndPoint(IPAddress.Any, 0));
             _client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _client.EnableBroadcast = true;
+
+            // 组播 TTL 默认是 1，只在本网段内有效。
+            // 联机场景下接收方可能经虚拟网卡进来，TTL 太小会让包出不去。
+            _client.Client.SetSocketOption(
+                SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 4);
+
+            // 注意：这里不要设置 SocketOptionName.MulticastInterface。
+            // 实测（Windows 11、多网卡机器）手动绑定出口网卡后，
+            // 发往 224.0.2.60 的包在接收端一个都收不到；
+            // 保持不指定、由系统按路由表选择接口才是正确做法。
         }
         catch (Exception ex)
         {

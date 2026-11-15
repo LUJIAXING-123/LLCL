@@ -217,6 +217,24 @@ public sealed class LinkService : IAsyncDisposable
     /// <param name="ct">取消令牌。</param>
     public async Task<bool> CreateRoomAsync(string displayName, int mcPort, CancellationToken ct = default)
     {
+        if (Interlocked.Exchange(ref _busy, 1) == 1)
+        {
+            Logger.Warn("[联机] 上一次操作尚未结束，忽略这次创建房间请求");
+            return false;
+        }
+
+        try
+        {
+            return await _CreateRoomCoreAsync(displayName, mcPort, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private async Task<bool> _CreateRoomCoreAsync(string displayName, int mcPort, CancellationToken ct)
+    {
         DisplayName = string.IsNullOrWhiteSpace(displayName) ? "Player" : displayName.Trim();
 
         // 端口合法性前置检查，避免把底层 SocketException 直接抛给用户
@@ -267,9 +285,34 @@ public sealed class LinkService : IAsyncDisposable
         }
     }
 
+    /// <summary>加入/创建是否正在进行，防止连点导致重复启动内核。</summary>
+    private int _busy;
+
     /// <summary>通过房间码加入房间。端口可从房间码解析，也可手动覆盖。</summary>
     public async Task<bool> JoinRoomAsync(string roomCode, string displayName, int? portOverride = null,
         CancellationToken ct = default)
+    {
+        // 连点「加入」会启动两个内核、建两套端口转发，
+        // 日志里表现为短时间内两条「正在加入房间」并各自成功。
+        // 后者会覆盖前者的会话状态，本地端口也对不上，用户看到的多半是坏的那一半。
+        if (Interlocked.Exchange(ref _busy, 1) == 1)
+        {
+            Logger.Warn("[联机] 上一次加入尚未结束，忽略这次请求");
+            return false;
+        }
+
+        try
+        {
+            return await _JoinRoomCoreAsync(roomCode, displayName, portOverride, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private async Task<bool> _JoinRoomCoreAsync(string roomCode, string displayName, int? portOverride,
+        CancellationToken ct)
     {
         DisplayName = string.IsNullOrWhiteSpace(displayName) ? "Player" : displayName.Trim();
 
