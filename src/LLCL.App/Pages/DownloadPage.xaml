@@ -206,15 +206,11 @@
                                                            VerticalAlignment="Center"
                                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
                                             </StackPanel>
-                                            <TextBlock Text="{x:Bind Summary}" FontSize="12" TextWrapping="Wrap"
-                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-
                                             <!--
-                                              中文简介：取到后填入，未取到时为空字符串，
-                                              空文本不占高度，不需要额外控制可见性
-                                              （用 bool 绑 Visibility 在某些情况下不生效）。
+                                              介绍：有中文译文时只显示中文，否则显示原文。
+                                              两者同时显示会让每行长度翻倍。
                                             -->
-                                            <TextBlock Text="{x:Bind TranslatedText, Mode=OneWay}" FontSize="12"
+                                            <TextBlock Text="{x:Bind DescriptionText, Mode=OneWay}" FontSize="12"
                                                        TextWrapping="Wrap"
                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
 

@@ -39,6 +39,7 @@ public sealed class ResourceCard : System.ComponentModel.INotifyPropertyChanged
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Translated)));
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(TranslatedText)));
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(HasTranslated)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(DescriptionText)));
         }
     }
 
@@ -47,6 +48,12 @@ public sealed class ResourceCard : System.ComponentModel.INotifyPropertyChanged
     /// 空文本不占高度，因此不需要再控制可见性。
     /// </summary>
     public string TranslatedText => _translated ?? string.Empty;
+
+    /// <summary>
+    /// 列表里实际显示的那段介绍：有中文就只显示中文，没有才回退到原文。
+    /// 两者同时显示会让每一行都长一倍，也没必要。
+    /// </summary>
+    public string DescriptionText => string.IsNullOrWhiteSpace(_translated) ? Summary : _translated!;
 
     /// <summary>是否有中文简介。</summary>
     public bool HasTranslated => !string.IsNullOrWhiteSpace(_translated);
