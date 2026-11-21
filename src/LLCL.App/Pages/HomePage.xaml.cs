@@ -305,35 +305,25 @@ public sealed partial class HomePage : Page
         {
             LaunchStageText.Text = stage.Message;
 
-            // 进度按阶段推进，而不是直接跳到新值。
-            // 启动阶段的总耗时里，准备命令那一段几乎没有可报告的进度，
-            // 直接赋值会让进度条突然弹到一大截，看着像卡住了又忽然好了。
             var target = Math.Clamp(stage.Ratio, 0, 1);
+
+            // 直接赋值，不用 Storyboard 做补间。
+            // ProgressBar.Value 的补间属于「依赖动画」，每帧都要在 UI 线程
+            // 重新布局，与不确定态动画叠加时会把界面拖住，
+            // 结果是既看不到平滑效果，窗口还会卡上一会儿。
             if (target > LaunchProgress.Value)
             {
                 LaunchProgress.IsIndeterminate = false;
-                AnimateProgressTo(target);
+                LaunchProgress.Value = target;
+            }
+            else
+            {
+                // 进度不再增长说明这一步没有可量化的进度
+                // （最典型的是「等待游戏窗口」要等十几秒），
+                // 这时切到不确定态，让用户看到还在动，而不是停在某个百分比上。
+                LaunchProgress.IsIndeterminate = true;
             }
         });
-    }
-
-    /// <summary>把进度条平滑推到目标值。</summary>
-    private void AnimateProgressTo(double target)
-    {
-        var animation = new DoubleAnimation
-        {
-            To = target,
-            Duration = TimeSpan.FromMilliseconds(320),
-            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-            EnableDependentAnimation = true
-        };
-
-        Storyboard.SetTarget(animation, LaunchProgress);
-        Storyboard.SetTargetProperty(animation, "Value");
-
-        var storyboard = new Storyboard();
-        storyboard.Children.Add(animation);
-        storyboard.Begin();
     }
 
     /// <summary>进入/退出启动忙碌状态：按钮转圈，进度条常驻直到窗口出现。</summary>

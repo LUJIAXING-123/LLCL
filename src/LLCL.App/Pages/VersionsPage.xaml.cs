@@ -13,13 +13,29 @@ namespace LLCL.Pages;
 public sealed partial class VersionsPage : Page
 {
     /// <summary>列表项。绑定字段必须是属性，XAML 才能取值。</summary>
-    public sealed class VersionItem
+    public sealed class VersionItem : System.ComponentModel.INotifyPropertyChanged
     {
         public string Id { get; init; } = string.Empty;
         public string DisplayName { get; init; } = string.Empty;
-        public string Subtitle { get; init; } = string.Empty;
+
+        private string _subtitle = string.Empty;
+
+        /// <summary>副标题。目录大小在后台算完后再补进来，所以需要可通知。</summary>
+        public string Subtitle
+        {
+            get => _subtitle;
+            set
+            {
+                if (_subtitle == value) return;
+                _subtitle = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Subtitle)));
+            }
+        }
+
         public string LoaderText { get; init; } = string.Empty;
         public bool IsBroken { get; init; }
+
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     }
 
     private List<VersionItem> _all = [];
@@ -40,16 +56,21 @@ public sealed partial class VersionsPage : Page
 
     private void Reload()
     {
-        _all = VersionManager.ScanAll()
+        // 先不带大小扫一遍，保证列表立刻显示出来。
+        // 递归统计目录大小很慢，放在这里会把切页卡住。
+        var entries = VersionManager.ScanAll()
             .OrderByDescending(v => v.SortOrder)
             .ThenBy(v => v.DisplayName, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+
+        _all = entries
             .Select(v => new VersionItem
             {
                 Id = v.Id,
                 DisplayName = v.DisplayName,
                 Subtitle = v.IsBroken
                     ? $"⚠ {v.BrokenReason}"
-                    : $"{v.Loader} · {v.SizeDisplay} · {v.JavaDisplay}",
+                    : $"{v.Loader} · {v.JavaDisplay}",
                 LoaderText = v.IsBroken ? "损坏" : DescribeLoader(v),
                 IsBroken = v.IsBroken
             })
@@ -60,6 +81,48 @@ public sealed partial class VersionsPage : Page
         SummaryText.Text = _all.Count == 0
             ? "暂无已安装版本"
             : $"共 {_all.Count} 个版本";
+
+        FillSizesInBackground();
+    }
+
+    /// <summary>
+    /// 在后台线程统计各版本目录大小，算完再逐项补进副标题。
+    /// 这样列表能立刻出现，不会因为统计磁盘占用而白屏。
+    /// </summary>
+    private void FillSizesInBackground()
+    {
+        var items = _all.Where(i => !i.IsBroken).ToList();
+        if (items.Count == 0) return;
+
+        var versionsRoot = Paths.VersionsDir;
+
+        _ = Task.Run(() =>
+        {
+            foreach (var item in items)
+            {
+                long size;
+                try
+                {
+                    size = VersionManager.ComputeSize(Path.Combine(versionsRoot, item.Id));
+                }
+                catch
+                {
+                    continue;
+                }
+
+                var text = size switch
+                {
+                    < 1024 => $"{size} B",
+                    < 1024 * 1024 => $"{size / 1024.0:F1} KB",
+                    < 1024L * 1024 * 1024 => $"{size / 1024.0 / 1024:F1} MB",
+                    _ => $"{size / 1024.0 / 1024 / 1024:F2} GB"
+                };
+
+                var subtitle = $"{item.LoaderText} · {text}";
+
+                _ = DispatcherQueue.TryEnqueue(() => item.Subtitle = subtitle);
+            }
+        });
     }
 
     private static string DescribeLoader(VersionEntry v)

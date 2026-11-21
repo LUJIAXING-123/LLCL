@@ -49,7 +49,13 @@ public static class GameLaunchService
             else
             {
                 onStage?.Invoke(new LaunchStage($"正在登录 {selected.Name}…", 0.12));
-                account = await AccountManager.EnsureValidAsync(selected).ConfigureAwait(true);
+
+                // 放到后台线程执行。
+                // 令牌需要重新签发时会连续请求微软、Xbox Live、XSTS 与 Minecraft
+                // 四个端点，实测要 4 秒左右；这个过程留在界面线程上，
+                // 窗口在等待期间完全无响应，表现为「点了启动就卡死一会儿」。
+                account = await Task.Run(() => AccountManager.EnsureValidAsync(selected))
+                    .ConfigureAwait(true);
             }
         }
         catch (AuthException ex)

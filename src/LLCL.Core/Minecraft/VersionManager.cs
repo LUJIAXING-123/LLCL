@@ -16,8 +16,17 @@ public static class VersionManager
         try { VersionsChanged?.Invoke(); }
         catch (Exception ex) { Logger.Warn($"版本变更通知失败: {ex.Message}"); }
     }
-    /// <summary>扫描全部已安装版本，返回带详细元信息的列表。</summary>
-    public static List<VersionEntry> ScanAll()
+    /// <summary>
+    /// 扫描全部已安装版本，返回带详细元信息的列表。
+    /// <para>
+    /// <paramref name="includeSize"/> 默认关闭：
+    /// 计算目录大小要递归遍历版本下的全部文件，
+    /// 整合包版本动辄几千个文件，在界面线程上做这件事会明显卡住窗口。
+    /// 只有确实需要展示大小的界面（版本列表）才按需开启，
+    /// 并且应当在后台线程调用。
+    /// </para>
+    /// </summary>
+    public static List<VersionEntry> ScanAll(bool includeSize = false)
     {
         var result = new List<VersionEntry>();
         if (!Directory.Exists(Paths.VersionsDir)) return result;
@@ -55,7 +64,7 @@ public static class VersionManager
                     LoaderVersion = loader.Version,
                     JavaMajor = javaRequired,
                     JavaPath = FindJavaFor(javaRequired),
-                    SizeBytes = ComputeSize(dir),
+                    SizeBytes = includeSize ? ComputeSize(dir) : 0,
                     CreatedAt = File.GetCreationTime(jsonPath),
                     SortOrder = settings.SortOrder
                 });
