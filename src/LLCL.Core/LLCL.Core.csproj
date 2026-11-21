@@ -39,6 +39,13 @@
           直接提交 jar 是为了让构建不依赖本机是否装了 JDK。
         -->
         <EmbeddedResource Include="Assets\forge-shim.jar" LogicalName="LLCL.Core.forge-shim.jar" />
+
+        <!--
+          模组中文名数据：gzip 压缩的 protobuf，沿用 PCL 内置的 mcmod.buf，
+          原始数据整理自 mcmod.cn。仅用于按 slug 显示中文名称。
+          若权利方认为不妥，请联系我们，会立即移除。
+        -->
+        <EmbeddedResource Include="Assets\mcmod.buf" LogicalName="LLCL.Core.mcmod.buf" />
     </ItemGroup>
 
     <Import Project="$(_LlclRepoRoot)build\Version.targets" />

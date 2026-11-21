@@ -1390,17 +1390,23 @@ public sealed partial class DownloadPage : Page
     }
 
     /// <summary>把搜索结果转换成列表项。</summary>
-    private static ResourceCard ToCard(ResourceHit hit) => new()
+    private static ResourceCard ToCard(ResourceHit hit)
     {
-        Id = hit.Id,
-        Name = hit.Name,
-        Summary = hit.Description,
-        Source = hit.Source == ResourceSource.Modrinth ? "Modrinth" : "CurseForge",
-        IconUrl = hit.IconUrl,
-        Icon = CreateIcon(hit.IconUrl),
-        Meta = $"下载 {FormatDownloads(hit.Downloads)}" +
-               (string.IsNullOrEmpty(hit.Author) ? string.Empty : $" · {hit.Author}")
-    };
+        // 有中文名就用中文名（数据里通常已带上原名，如「工业时代2 (Industrial Craft 2)」）
+        var chineseName = LLCL.Core.Resources.ModNameTranslation.TryGetChineseName(hit.Slug);
+
+        return new ResourceCard
+        {
+            Id = hit.Id,
+            Name = chineseName ?? hit.Name,
+            Summary = hit.Description,
+            Source = hit.Source == ResourceSource.Modrinth ? "Modrinth" : "CurseForge",
+            IconUrl = hit.IconUrl,
+            Icon = CreateIcon(hit.IconUrl),
+            Meta = $"下载 {FormatDownloads(hit.Downloads)}" +
+                   (string.IsNullOrEmpty(hit.Author) ? string.Empty : $" · {hit.Author}")
+        };
+    }
 
     /// <summary>
     /// 由图标地址构造缩略图。BitmapImage 默认异步加载，

@@ -69,6 +69,19 @@
                     </StackPanel>
                 </StackPanel>
             </Border>
+            <!-- 数据来源与版权声明 -->
+            <Border Style="{StaticResource CardStyle}">
+                <StackPanel Spacing="8">
+                    <TextBlock Text="数据来源" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock FontSize="13" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               Text="模组中文名数据沿用自 PCL 内置的数据文件，原始内容整理自 mcmod.cn；模组简介的中文译文来自 mod.mcimirror.top；下载数据来自 Modrinth 与 CurseForge。" />
+                    <TextBlock FontSize="12" TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               Text="上述数据版权归各自来源及贡献者所有，本项目仅为复刻 PCL 的浏览体验而使用。若权利方认为不妥，请联系我们，我们会立即移除相关内容。" />
+                    <HyperlinkButton Content="提交反馈" Click="Repo_Click" Padding="4" />
+                </StackPanel>
+            </Border>
         </StackPanel>
     </Grid>
 </Page>
