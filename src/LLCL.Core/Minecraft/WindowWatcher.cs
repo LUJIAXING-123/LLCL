@@ -28,6 +28,9 @@ public static class WindowWatcher
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetClassNameW")]
+    private static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
@@ -65,48 +68,111 @@ public static class WindowWatcher
         return IntPtr.Zero;
     }
 
-    /// <summary>在指定进程的所有可见窗口中，找尺寸最大的那个（即游戏主窗口）。</summary>
+    /// <summary>
+    /// 在指定进程的窗口里找出游戏主窗口。
+    /// <para>
+    /// 按<b>窗口类名</b>识别，与 PCL 的思路一致，但要同时覆盖两代渲染后端：
+    /// 旧版用 GLFW/LWJGL，类名是 <c>GLFW30</c>、<c>LWJGL</c>；
+    /// 新版（实测 26.3）改用 SDL，类名是 <c>SDL_app</c>。
+    /// Mac 风格的 AWT 窗口类名是 <c>SunAwtFrame</c>。
+    /// </para>
+    /// <para>
+    /// 必须同时要求窗口可见：SDL 会为同一个进程额外创建两个隐藏窗口
+    /// （<c>Minecraft - RenderPearl OpenGL Hidden Utility Window</c> 以及一个空标题窗口），
+    /// 枚举顺序在它们之前，只按类名取第一个会拿到隐藏窗口。
+    /// </para>
+    /// <para>
+    /// 之前用的是「找该进程最大且带标题的可见窗口」这种启发式做法，
+    /// 换一台机器就可能失效——部分环境下窗口标题要等很久才设置，
+    /// 或者窗口尺寸小于阈值，于是永远匹配不到，表现为一直卡在「等待游戏窗口」。
+    /// 类名在窗口创建时就确定，不受标题、尺寸、分辨率影响。
+    /// </para>
+    /// </summary>
     private static IntPtr FindGameWindow(uint processId)
     {
-        IntPtr best = IntPtr.Zero;
-        var bestArea = 0;
+        var found = IntPtr.Zero;
 
         try
         {
             EnumWindows((hWnd, _) =>
             {
-                uint pid;
-                GetWindowThreadProcessId(hWnd, out pid);
-                if (pid != processId) return true;
+                // 先按类名筛，绝大多数无关窗口在这一步就被排除
+                var classBuffer = new System.Text.StringBuilder(256);
+                GetClassName(hWnd, classBuffer, classBuffer.Capacity);
+                var className = classBuffer.ToString();
 
+                if (className is not ("GLFW30" or "LWJGL" or "SunAwtFrame" or "SDL_app"))
+                    return true;
+
+                // 隐藏窗口一律跳过：SDL 的辅助窗口类名同样是 SDL_app
                 if (!IsWindowVisible(hWnd)) return true;
 
-                // 必须有标题，排除隐藏的辅助窗口
-                if (GetWindowTextLength(hWnd) <= 0) return true;
+                var titleBuffer = new System.Text.StringBuilder(512);
+                GetWindowText(hWnd, titleBuffer, titleBuffer.Capacity);
+                var title = titleBuffer.ToString();
 
-                RECT rect;
-                if (!GetWindowRect(hWnd, out rect)) return true;
+                // 排除 Forge 加载窗口、GLFW 消息窗口等辅助窗口
+                if (title.StartsWith("FML", StringComparison.Ordinal)) return true;
+                if (title.StartsWith("GLFW", StringComparison.Ordinal)) return true;
+                if (title == "PopupMessageWindow") return true;
+                if (title.Contains("Hidden Utility Window", StringComparison.OrdinalIgnoreCase))
+                    return true;
 
-                var width = rect.Right - rect.Left;
-                var height = rect.Bottom - rect.Top;
+                // 类名与可见性都通过，再确认是否属于目标进程
+                GetWindowThreadProcessId(hWnd, out var pid);
+                if (pid != processId) return true;
 
-                // 游戏窗口至少要有一定尺寸，过滤掉启动早期的小窗口
-                if (width < 200 || height < 150) return true;
-
-                var area = width * height;
-                if (area > bestArea)
-                {
-                    bestArea = area;
-                    best = hWnd;
-                }
-
-                return true;
+                found = hWnd;
+                return false; // 找到即停止枚举
             }, IntPtr.Zero);
+
+            if (found != IntPtr.Zero) return found;
+
+            // 类名没匹配上时退回原来的启发式，保证兼容性
+            return FindLargestVisibleWindow(processId);
         }
         catch (Exception ex)
         {
             Logger.Debug($"枚举窗口失败: {ex.Message}");
+            return found;
         }
+    }
+
+    /// <summary>
+    /// 兜底：找该进程尺寸最大的可见窗口。
+    /// 只在按类名匹配不到时使用，放宽了标题要求，
+    /// 避免因为标题尚未设置而漏判。
+    /// </summary>
+    private static IntPtr FindLargestVisibleWindow(uint processId)
+    {
+        IntPtr best = IntPtr.Zero;
+        var bestArea = 0;
+
+        EnumWindows((hWnd, _) =>
+        {
+            GetWindowThreadProcessId(hWnd, out var pid);
+            if (pid != processId) return true;
+
+            if (!IsWindowVisible(hWnd)) return true;
+
+            RECT rect;
+            if (!GetWindowRect(hWnd, out rect)) return true;
+
+            var width = rect.Right - rect.Left;
+            var height = rect.Bottom - rect.Top;
+
+            // 过滤明显不是游戏的小窗口
+            if (width < 160 || height < 120) return true;
+
+            var area = width * height;
+            if (area > bestArea)
+            {
+                bestArea = area;
+                best = hWnd;
+            }
+
+            return true;
+        }, IntPtr.Zero);
 
         return best;
     }

@@ -144,6 +144,7 @@
                                 <TextBlock x:Name="VersionCountText" Style="{StaticResource SubHeaderTextStyle}" />
                                 <StackPanel Orientation="Horizontal" Spacing="8">
                                     <Button Content="版本列表" Click="GoVersions_Click" />
+                                    <Button Content="版本设置" Click="GoVersionSettings_Click" />
                                     <Button Content="下载中心" Click="GoDownload_Click" />
                                 </StackPanel>
                             </StackPanel>

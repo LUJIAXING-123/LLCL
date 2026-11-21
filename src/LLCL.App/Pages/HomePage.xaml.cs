@@ -426,6 +426,19 @@ public sealed partial class HomePage : Page
 
     private void GoDownload_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("download");
     private void GoVersions_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("versions");
+
+    /// <summary>直接打开当前待启动版本的设置页。</summary>
+    private async void GoVersionSettings_Click(object sender, RoutedEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_activeVersionId))
+        {
+            await ShowAsync("还没有版本", "请先在「版本列表」里安装或选择一个版本。");
+            return;
+        }
+
+        MainWindow.Instance?.ShowVersionSettings(_activeVersionId);
+    }
+
     private void GoLink_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("link");
 
     private async void ManageVersion_Click(object sender, RoutedEventArgs e)
