@@ -11,11 +11,23 @@ namespace LLCL.Pages;
 public sealed partial class VersionSettingsPage : Page
 {
     private readonly string _versionId;
+
+    /// <summary>
+    /// 返回时回到哪个页面。
+    /// <para>
+    /// 从版本列表点「设置」进来，返回应回到版本列表；
+    /// 从首页「版本设置」按钮进来，返回应回到首页。
+    /// 一律跳版本列表会让首页进来的用户觉得跑偏了。
+    /// </para>
+    /// </summary>
+    private readonly string _returnTag;
+
     private VersionSettings _settings = new();
 
-    public VersionSettingsPage(string versionId)
+    public VersionSettingsPage(string versionId, string returnTag = "versions")
     {
         _versionId = versionId;
+        _returnTag = string.IsNullOrWhiteSpace(returnTag) ? "versions" : returnTag;
         InitializeComponent();
         _settings = VersionSettings.Load(versionId);
 
@@ -34,7 +46,7 @@ public sealed partial class VersionSettingsPage : Page
             Show(tag);
     }
 
-    private void Back_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("versions");
+    private void Back_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate(_returnTag);
 
     private async void Launch_Click(object sender, RoutedEventArgs e)
     {
@@ -692,7 +704,7 @@ public sealed partial class VersionSettingsPage : Page
             }
 
             await ShowAsync("重命名成功", $"版本已重命名为 {newId}");
-            MainWindow.Instance?.Navigate("versions");
+            MainWindow.Instance?.Navigate(_returnTag);
         };
         panel.Children.Add(renameButton);
 
@@ -727,7 +739,7 @@ public sealed partial class VersionSettingsPage : Page
             }
 
             // 删除成功后回到下载页；版本列表由 VersionsChanged 事件自动刷新
-            MainWindow.Instance?.Navigate("versions");
+            MainWindow.Instance?.Navigate(_returnTag);
         };
         panel.Children.Add(deleteButton);
     }
@@ -825,6 +837,7 @@ public sealed partial class VersionSettingsPage : Page
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 }
+
 
 
 

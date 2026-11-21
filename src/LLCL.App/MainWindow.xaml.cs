@@ -329,9 +329,9 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>打开指定版本的设置页。</summary>
-    public void ShowVersionSettings(string versionId)
+    public void ShowVersionSettings(string versionId, string returnTag = "versions")
     {
-        var page = new VersionSettingsPage(versionId);
+        var page = new VersionSettingsPage(versionId, returnTag);
         ContentFrame.Content = page;
         PlayPageEntrance(page);
     }

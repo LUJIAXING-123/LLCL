@@ -436,7 +436,8 @@ public sealed partial class HomePage : Page
             return;
         }
 
-        MainWindow.Instance?.ShowVersionSettings(_activeVersionId);
+        // 从首页进来的，返回时回首页，不要跳去版本列表
+        MainWindow.Instance?.ShowVersionSettings(_activeVersionId, "home");
     }
 
     private void GoLink_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("link");
