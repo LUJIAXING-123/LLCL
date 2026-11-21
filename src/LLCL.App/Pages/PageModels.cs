@@ -12,7 +12,7 @@ public sealed class VersionCard
     public string LoaderBadge { get; init; } = "原版";
 }
 
-public sealed class ResourceCard
+public sealed class ResourceCard : System.ComponentModel.INotifyPropertyChanged
 {
     public string Id { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
@@ -20,6 +20,31 @@ public sealed class ResourceCard
     public string Meta { get; init; } = string.Empty;
     public string Source { get; init; } = string.Empty;
     public string? IconUrl { get; init; }
+
+    /// <summary>列表缩略图。由 IconUrl 构造，加载是异步的，不阻塞列表。</summary>
+    public Microsoft.UI.Xaml.Media.ImageSource? Icon { get; init; }
+
+    private string? _translated;
+
+    /// <summary>
+    /// 中文简介。取到之前为 null，界面据此决定是否显示这一行。
+    /// </summary>
+    public string? Translated
+    {
+        get => _translated;
+        set
+        {
+            if (_translated == value) return;
+            _translated = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Translated)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(HasTranslated)));
+        }
+    }
+
+    /// <summary>是否有中文简介，用于控制那一行的可见性。</summary>
+    public bool HasTranslated => !string.IsNullOrWhiteSpace(_translated);
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 }
 
 public sealed class VersionItem

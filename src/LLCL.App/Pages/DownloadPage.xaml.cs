@@ -1091,7 +1091,12 @@ public sealed partial class DownloadPage : Page
 
             _resourcePage = page;
             _resources.Clear();
-            foreach (var hit in batch) _resources.Add(ToCard(hit));
+
+            var cards = batch.Select(ToCard).ToList();
+            foreach (var card in cards) _resources.Add(card);
+
+            // 中文简介逐条后台补齐，不阻塞列表显示
+            _ = FillTranslationsAsync(cards);
 
             if (batch.Count == 0 && page > 1)
             {
@@ -1391,9 +1396,71 @@ public sealed partial class DownloadPage : Page
         Name = hit.Name,
         Summary = hit.Description,
         Source = hit.Source == ResourceSource.Modrinth ? "Modrinth" : "CurseForge",
+        IconUrl = hit.IconUrl,
+        Icon = CreateIcon(hit.IconUrl),
         Meta = $"下载 {FormatDownloads(hit.Downloads)}" +
                (string.IsNullOrEmpty(hit.Author) ? string.Empty : $" · {hit.Author}")
     };
+
+    /// <summary>
+    /// 由图标地址构造缩略图。BitmapImage 默认异步加载，
+    /// 不会因为网络慢而卡住列表；失败也不影响其它内容显示。
+    /// </summary>
+    private static Microsoft.UI.Xaml.Media.ImageSource? CreateIcon(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return null;
+
+        try
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+            return new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 后台为当前页的项目补中文简介。
+    /// 每页最多 40 条，并发 6 个请求，取不到的保持原文。
+    /// </summary>
+    private async Task FillTranslationsAsync(List<ResourceCard> cards)
+    {
+        using var gate = new SemaphoreSlim(6);
+
+        var tasks = cards.Select(async card =>
+        {
+            if (string.IsNullOrWhiteSpace(card.Name)) return;
+
+            await gate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                // 用列表里记录的来源判断该查哪个站点
+                var source = card.Source == "Modrinth"
+                    ? ResourceSource.Modrinth
+                    : ResourceSource.CurseForge;
+
+                var translated = await ResourceService
+                    .GetTranslatedDescriptionAsync(source, card.Id)
+                    .ConfigureAwait(false);
+
+                if (string.IsNullOrWhiteSpace(translated)) return;
+
+                Dispatch(() => card.Translated = translated);
+            }
+            catch
+            {
+                // 翻译失败保持原文
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
 
     private static string FormatDownloads(long count)
     {

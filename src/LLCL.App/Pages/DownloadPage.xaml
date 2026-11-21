@@ -186,10 +186,20 @@
                                 <DataTemplate x:DataType="local:ResourceCard">
                                     <Grid Padding="0,8" ColumnSpacing="12">
                                         <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <StackPanel>
+
+                                        <!-- 项目图标：与 PCL 一致，列表里直接显示缩略图 -->
+                                        <Border Width="48" Height="48" CornerRadius="6"
+                                                VerticalAlignment="Top"
+                                                Background="{ThemeResource ControlFillColorSecondaryBrush}">
+                                            <Image Source="{x:Bind Icon}" Stretch="UniformToFill"
+                                                   Width="48" Height="48" />
+                                        </Border>
+
+                                        <StackPanel Grid.Column="1" Spacing="2">
                                             <StackPanel Orientation="Horizontal" Spacing="8">
                                                 <TextBlock Text="{x:Bind Name}" FontWeight="SemiBold" />
                                                 <TextBlock Text="{x:Bind Source}" FontSize="11"
@@ -198,6 +208,13 @@
                                             </StackPanel>
                                             <TextBlock Text="{x:Bind Summary}" FontSize="12" TextWrapping="Wrap"
                                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+                                            <!-- 中文简介：取到后才显示 -->
+                                            <TextBlock Text="{x:Bind Translated, Mode=OneWay}" FontSize="12"
+                                                       TextWrapping="Wrap"
+                                                       Visibility="{x:Bind HasTranslated, Mode=OneWay}"
+                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
                                             <TextBlock Text="{x:Bind Meta}" FontSize="11"
                                                        Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                                         </StackPanel>

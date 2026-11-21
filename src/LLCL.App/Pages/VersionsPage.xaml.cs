@@ -188,6 +188,49 @@ public sealed partial class VersionsPage : Page
         MainWindow.Instance?.ShowVersionSettings(id);
     }
 
+    /// <summary>
+    /// 删除版本。二次确认后连同版本目录一起删掉，
+    /// 删除完成再刷新列表——版本管理器会广播变更，首页也会同步。
+    /// </summary>
+    private async void ItemDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: string id }) return;
+
+        var name = _all.FirstOrDefault(v => v.Id == id)?.DisplayName ?? id;
+
+        var confirm = new ContentDialog
+        {
+            Title = "删除版本",
+            Content = new TextBlock
+            {
+                Text = $"确定删除版本「{name}」吗？\n\n" +
+                       "会连同该版本的 mods、存档、配置一起删除，且不可恢复。",
+                TextWrapping = TextWrapping.Wrap
+            },
+            PrimaryButtonText = "删除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot
+        };
+
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+
+        if (!VersionManager.Delete(id, out var error))
+        {
+            var fail = new ContentDialog
+            {
+                Title = "删除失败",
+                Content = new TextBlock { Text = error ?? "未知错误", TextWrapping = TextWrapping.Wrap },
+                CloseButtonText = "确定",
+                XamlRoot = XamlRoot
+            };
+            await fail.ShowAsync();
+            return;
+        }
+
+        Reload();
+    }
+
     private void Back_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("home");
 
     private void GoDownload_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("download");

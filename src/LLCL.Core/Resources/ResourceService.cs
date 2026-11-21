@@ -88,6 +88,47 @@ public sealed class ResourceDependency
 public static class ResourceService
 {
     private const string ModrinthApi = "https://api.modrinth.com/v2";
+
+    /// <summary>
+    /// 中文简介查询与缓存。键为「来源:项目 ID」。
+    /// 列表每页 40 条，同一次浏览里会反复回填，缓存能避免重复请求。
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?>
+        TranslationCache = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// 取项目的中文简介。数据来自 PCL 使用的同一个翻译服务
+    /// （mod.mcimirror.top，与 CurseForge 镜像同一站点）。
+    /// 没有译文或请求失败时返回 null，调用方继续显示原文。
+    /// </summary>
+    public static async Task<string?> GetTranslatedDescriptionAsync(ResourceSource source, string id,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+
+        var key = $"{(source == ResourceSource.Modrinth ? "modrinth" : "curseforge")}:{id}";
+        if (TranslationCache.TryGetValue(key, out var cached)) return cached;
+
+        try
+        {
+            var from = source == ResourceSource.Modrinth ? "modrinth" : "curseforge";
+            var json = await GetJsonAsync($"https://mod.mcimirror.top/translate/{from}/{id}", ct)
+                .ConfigureAwait(false);
+
+            var text = json?["translated"]?.GetValue<string>();
+            var result = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+
+            TranslationCache[key] = result;
+            return result;
+        }
+        catch (Exception ex)
+        {
+            // 翻译只是锦上添花，失败不能影响列表
+            Logger.Debug($"获取中文简介失败 {key}: {ex.Message}");
+            TranslationCache[key] = null;
+            return null;
+        }
+    }
     private const string ModrinthMirror = "https://mod.mcimirror.top/modrinth/v2";
     private const string CurseForgeMirror = "https://mod.mcimirror.top/curseforge/v1";
 

@@ -41,6 +41,7 @@
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
 
                             <StackPanel Spacing="2">
@@ -57,6 +58,8 @@
 
                             <Button Grid.Column="2" Content="设置" Click="ItemSettings_Click"
                                     Tag="{Binding Id}" VerticalAlignment="Center" />
+                            <Button Grid.Column="3" Content="删除" Click="ItemDelete_Click"
+                                    Tag="{Binding Id}" VerticalAlignment="Center" Margin="8,0,0,0" />
                         </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
