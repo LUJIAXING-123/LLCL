@@ -298,120 +298,55 @@ public sealed partial class HomePage : Page
         }
     }
 
-    // ---------- 启动进度条（组合层动画） ----------
-    private Microsoft.UI.Composition.Visual? _progressVisual;
-    private double _progressValue;
-    private bool _progressMarquee;
+    // ---------- 启动时的卡片上滑动画 ----------
+    private Microsoft.UI.Composition.Visual? _cardVisual;
 
-    /// <summary>取填充条的组合层 Visual，并把它锚在左侧，缩放才会从左往右长。</summary>
-    private Microsoft.UI.Composition.Visual? ProgressVisual()
+    /// <summary>
+    /// 让整张启动卡片从下方平滑滑到最终位置。
+    /// <para>
+    /// 阶段文字出现时卡片会被撑高一行，如果直接让它跳变会显得很突兀。
+    /// 这里先给卡片一个向下的偏移，再动画回 0，
+    /// 观感上就是「卡片平滑上升，把那行『正在等待游戏窗口』带出来」。
+    /// 偏移由组合层 Offset 驱动，不影响布局，也不占 UI 线程。
+    /// </para>
+    /// </summary>
+    private void PlayCardRise()
     {
-        if (_progressVisual is not null) return _progressVisual;
-
         try
         {
-            _progressVisual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview
-                .GetElementVisual(LaunchProgressFill);
-            _progressVisual.CenterPoint = System.Numerics.Vector3.Zero;
+            _cardVisual ??= Microsoft.UI.Xaml.Hosting.ElementCompositionPreview
+                .GetElementVisual(LaunchCardRoot);
+
+            var offset = new System.Numerics.Vector3(0f, CardRiseDistance, 0f);
+            _cardVisual.StopAnimation("Offset");
+            _cardVisual.Offset = offset;
+
+            var compositor = _cardVisual.Compositor;
+
+            var animation = compositor.CreateVector3KeyFrameAnimation();
+            animation.InsertKeyFrame(
+                0f, offset,
+                compositor.CreateCubicBezierEasingFunction(
+                    new System.Numerics.Vector2(0f, 0f),
+                    new System.Numerics.Vector2(0.1f, 1f)));
+            animation.InsertKeyFrame(1f, System.Numerics.Vector3.Zero);
+            animation.Duration = TimeSpan.FromMilliseconds(320);
+
+            _cardVisual.StartAnimation("Offset", animation);
         }
         catch (Exception ex)
         {
-            Logger.Warn($"初始化进度条动画失败: {ex.Message}");
-            return null;
+            Logger.Warn($"启动卡片动画失败: {ex.Message}");
         }
-
-        return _progressVisual;
     }
 
-    /// <summary>
-    /// 把进度推进到指定比例。
-    /// <para>
-    /// 用组合层关键帧动画驱动 Scale，动画在合成器线程执行，
-    /// 不参与 UI 线程布局，因此既平滑又不会拖慢窗口。
-    /// （ProgressBar 的 Value 补间属于依赖动画，正好相反。）
-    /// </para>
-    /// </summary>
-    private void SetProgressRatio(double ratio)
-    {
-        var visual = ProgressVisual();
-        if (visual is null) return;
+    /// <summary>卡片上滑的起始偏移量，约等于阶段文字那一行的高度。</summary>
+    private const float CardRiseDistance = 22f;
 
-        StopMarquee(visual);
-
-        var compositor = visual.Compositor;
-
-        var animation = compositor.CreateVector3KeyFrameAnimation();
-        animation.InsertKeyFrame(
-            1f,
-            new System.Numerics.Vector3((float)ratio, 1f, 1f),
-            compositor.CreateCubicBezierEasingFunction(
-                new System.Numerics.Vector2(0f, 0f),
-                new System.Numerics.Vector2(0.2f, 1f)));
-        animation.Duration = TimeSpan.FromMilliseconds(280);
-
-        visual.StartAnimation("Scale", animation);
-        _progressValue = ratio;
-        _progressMarquee = false;
-    }
-
-    /// <summary>
-    /// 不确定态：一条 30% 宽的条从左滑到右，循环播放。
-    /// 用于「等待游戏窗口」这种没有可量化进度的阶段。
-    /// </summary>
-    private void StartMarquee()
-    {
-        if (_progressMarquee) return;
-
-        var visual = ProgressVisual();
-        if (visual is null) return;
-
-        var width = (float)Math.Max(1, LaunchProgressFill.ActualWidth);
-        if (width <= 1) width = (float)Math.Max(1, LaunchProgress.ActualWidth);
-        if (width <= 1) width = 400f;
-
-        var compositor = visual.Compositor;
-
-        // 只显示 30% 宽，再横向平移，形成走马灯效果
-        visual.StopAnimation("Scale");
-        visual.Scale = new System.Numerics.Vector3(0.3f, 1f, 1f);
-
-        var move = compositor.CreateScalarKeyFrameAnimation();
-        move.InsertKeyFrame(0f, 0f);
-        move.InsertKeyFrame(1f, width * 0.7f);
-        move.Duration = TimeSpan.FromSeconds(1.1);
-        move.IterationBehavior = Microsoft.UI.Composition.AnimationIterationBehavior.Forever;
-
-        visual.StartAnimation("Offset.X", move);
-        _progressMarquee = true;
-    }
-
-    private static void StopMarquee(Microsoft.UI.Composition.Visual visual)
-    {
-        visual.StopAnimation("Offset.X");
-        visual.Offset = System.Numerics.Vector3.Zero;
-    }
-
-    /// <summary>启动阶段回调，更新提示文字与进度。</summary>
+    /// <summary>启动阶段回调，更新提示文字。</summary>
     private void OnLaunchStage(GameLaunchService.LaunchStage stage)
     {
-        Dispatch(() =>
-        {
-            LaunchStageText.Text = stage.Message;
-
-            var target = Math.Clamp(stage.Ratio, 0, 1);
-
-            if (target > _progressValue + 0.001)
-            {
-                SetProgressRatio(target);
-            }
-            else
-            {
-                // 进度不再增长说明这一步没有可量化的进度
-                // （最典型的是「等待游戏窗口」要等十几秒），
-                // 切成走马灯，让用户看到还在动而不是停在某个位置。
-                StartMarquee();
-            }
-        });
+        Dispatch(() => LaunchStageText.Text = stage.Message);
     }
 
     /// <summary>进入/退出启动忙碌状态：按钮转圈，进度条常驻直到窗口出现。</summary>
@@ -426,37 +361,26 @@ public sealed partial class HomePage : Page
             LaunchButton.Content = "启动中…";
             LaunchStageText.Text = "正在准备…";
 
-            _progressValue = 0;
-            _progressMarquee = false;
-
-            var visual = ProgressVisual();
-            if (visual is not null)
-            {
-                visual.StopAnimation("Scale");
-                visual.Scale = new System.Numerics.Vector3(0f, 1f, 1f);
-                StopMarquee(visual);
-            }
-
             FadeIn(LaunchProgress);
 
-            // 布局完成后再开走动效，否则拿不到填充条的真实宽度
-            _ = DispatcherQueue.TryEnqueue(StartMarquee);
+            // 阶段文字是这一刻才展开的，卡片高度会立刻多出一行。
+            // 用上滑动效把这处跳变盖住。
+            PlayCardRise();
         }
         else
         {
             LaunchButton.Content = "启动";
             LaunchStageText.Text = string.Empty;
 
-            _progressValue = 0;
-            _progressMarquee = false;
-
-            var visual = ProgressVisual();
-            if (visual is not null)
+            try
             {
-                visual.StopAnimation("Scale");
-                visual.Scale = new System.Numerics.Vector3(0f, 1f, 1f);
-                StopMarquee(visual);
+                if (_cardVisual is not null)
+                {
+                    _cardVisual.StopAnimation("Offset");
+                    _cardVisual.Offset = System.Numerics.Vector3.Zero;
+                }
             }
+            catch { }
         }
     }
 

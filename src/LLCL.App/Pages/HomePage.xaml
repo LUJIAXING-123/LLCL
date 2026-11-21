@@ -44,8 +44,9 @@
                       启动卡片。
                       第一行高 93px（约 2/3 头像高度 140），卡片从第二行开始，
                       于是头像上 93px 露在卡片外、下 47px 落在卡片内。
+                      x:Name 用于启动时整体上滑的动画。
                     -->
-                    <Grid>
+                    <Grid x:Name="LaunchCardRoot">
                         <Grid.RowDefinitions>
                             <!-- 头像高 140，露出 70（约一半）在卡片外 -->
                             <RowDefinition Height="70" />
@@ -98,27 +99,11 @@
                                                TextTrimming="CharacterEllipsis" />
                                 </Grid>
 
-                                <!--
-                                  自绘进度条，紧贴卡片底部。
-                                  用 ProgressBar 的 Value 补间属于「依赖动画」，
-                                  每帧都要在 UI 线程重新布局，实际既不生效还会拖慢界面。
-                                  这里改成两个矩形，由组合层动画驱动，不占 UI 线程。
-                                -->
-                                <Grid Grid.Row="1" x:Name="LaunchProgress"
-                                      Height="4" Visibility="Collapsed"
-                                      CornerRadius="0,0,8,8">
-                                    <Grid x:Name="LaunchProgressTrack"
-                                          Background="{ThemeResource ControlStrokeColorDefaultBrush}"
-                                          CornerRadius="0,0,8,8" />
-                                    <!--
-                                      填充条铺满整宽，由组合层的 Scale.X 控制可见比例，
-                                      这样比例变化不需要重新测量布局。
-                                    -->
-                                    <Border x:Name="LaunchProgressFill"
-                                            Background="{ThemeResource AccentFillColorDefaultBrush}"
-                                            HorizontalAlignment="Stretch"
-                                            CornerRadius="0,0,8,8" />
-                                </Grid>
+                                <!-- 进度条紧贴卡片底部，用系统自带的滚动（不确定）样式 -->
+                                <ProgressBar Grid.Row="1" x:Name="LaunchProgress"
+                                             IsIndeterminate="True"
+                                             Height="4" CornerRadius="0,0,8,8"
+                                             Visibility="Collapsed" />
                             </Grid>
                         </Border>
 
