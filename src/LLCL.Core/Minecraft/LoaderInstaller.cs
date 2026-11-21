@@ -278,6 +278,41 @@ public static class LoaderInstaller
         };
     }
 
+    /// <summary>
+    /// 确保游戏目录下存在 launcher_profiles.json。
+    /// <para>
+    /// Forge / NeoForge 的官方安装器在解析参数后会检查这个文件，
+    /// 缺失时直接以退出码 1 结束，日志里只说「need to run the launcher first」，
+    /// 从报错完全看不出是缺文件。补一个最小结构即可让它继续。
+    /// 已存在时不动，避免覆盖用户真实配置。
+    /// </para>
+    /// </summary>
+    private static void EnsureLauncherProfiles()
+    {
+        try
+        {
+            var path = Path.Combine(Paths.MinecraftDir, "launcher_profiles.json");
+            if (File.Exists(path)) return;
+
+            Directory.CreateDirectory(Paths.MinecraftDir);
+
+            const string minimal = """
+            {
+              "profiles": {},
+              "settings": { "enableSnapshots": false },
+              "version": 3
+            }
+            """;
+
+            File.WriteAllText(path, minimal);
+            Logger.Info($"已生成 {path}（Forge 安装器需要）");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"生成 launcher_profiles.json 失败: {ex.Message}");
+        }
+    }
+
     /// <summary>Fabric / Quilt：meta API 直接返回完整的 profile JSON。</summary>
     private static async Task<string> _InstallFabricAsync(string mcVersion, string loaderVersion,
         string loaderName, IProgress<(string step, double ratio)>? progress, CancellationToken ct)
@@ -548,6 +583,11 @@ public static class LoaderInstaller
     {
         var label = neo ? "NeoForge" : "Forge";
         var fullVersion = neo ? loaderVersion : $"{mcVersion}-{loaderVersion}";
+
+        // 官方安装器启动时会检查游戏目录下是否存在 launcher_profiles.json，
+        // 没有就直接报「you need to run the launcher first」并以退出码 1 结束。
+        // LLCL 从不生成这个文件，所以先补一个最小可用的。
+        EnsureLauncherProfiles();
 
         progress?.Report(($"下载 {label} 安装器", 0.05));
 

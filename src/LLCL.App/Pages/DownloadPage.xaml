@@ -358,8 +358,8 @@
                                         </Grid>
                                         <ProgressBar Value="{x:Bind Ratio, Mode=OneWay}" Maximum="1" Height="4" />
                                         <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <Button Content="暂停 / 继续" Tag="{x:Bind Id}" Click="PauseTask_Click" />
-                                            <Button Content="取消并清理" Tag="{x:Bind Id}" Click="CancelTask_Click" />
+                                            <Button Content="暂停 / 继续" Tag="{x:Bind Id}" Click="PauseTask_Click" IsEnabled="{x:Bind CanTogglePause, Mode=OneWay}" />
+                                            <Button Content="{x:Bind ActionLabel, Mode=OneWay}" Tag="{x:Bind Id}" Click="CancelTask_Click" />
                                         </StackPanel>
                                     </StackPanel>
                                 </Border>
@@ -399,4 +399,5 @@
         </Border>
     </Grid>
 </Page>
+
 

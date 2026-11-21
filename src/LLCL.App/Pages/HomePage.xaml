@@ -91,16 +91,22 @@
                                             VerticalAlignment="Center"
                                             Click="LaunchButton_Click" />
 
-                                    <!-- 版本选择：跨满整行，从卡片最左开始 -->
-                                    <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Spacing="6">
-                                        <ComboBox x:Name="VersionComboBox" HorizontalAlignment="Stretch"
-                                                  Header="游戏版本"
-                                                  SelectionChanged="VersionComboBox_SelectionChanged" />
+                                    <!-- 版本切换：改用按钮进版本列表，与 PCL 一致 -->
+                                    <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="CurrentVersionLine" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Style="{StaticResource SubHeaderTextStyle}" />
+                                        <Button Grid.Column="1" Content="切换版本" Click="GoVersions_Click" />
+                                    </Grid>
 
-                                        <TextBlock x:Name="LaunchStageText" Visibility="Collapsed"
-                                                   Style="{StaticResource SubHeaderTextStyle}"
-                                                   TextTrimming="CharacterEllipsis" />
-                                    </StackPanel>
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                                               x:Name="LaunchStageText" Visibility="Collapsed"
+                                               Style="{StaticResource SubHeaderTextStyle}"
+                                               TextTrimming="CharacterEllipsis" />
                                 </Grid>
 
                                 <!-- 进度条紧贴卡片底部：占满宽度，下沿与卡片圆角对齐 -->
@@ -147,14 +153,13 @@
                                 <TextBlock Text="已安装版本" FontSize="16" FontWeight="SemiBold" />
                                 <TextBlock x:Name="VersionCountText" Style="{StaticResource SubHeaderTextStyle}" />
                                 <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <Button Content="前往下载中心" Click="GoDownload_Click" />
-                                    <Button Content="管理此版本" Click="ManageVersion_Click" />
+                                    <Button Content="版本列表" Click="GoVersions_Click" />
+                                    <Button Content="下载中心" Click="GoDownload_Click" />
                                 </StackPanel>
                             </StackPanel>
                         </Border>
 
-                        <!-- 联机状态卡片随联机入口一并隐藏 -->
-                        <Border Grid.Column="1" Style="{StaticResource CardStyle}" Visibility="Collapsed">
+                        <Border Grid.Column="1" Style="{StaticResource CardStyle}">
                             <StackPanel Spacing="10">
                                 <TextBlock Text="联机状态" FontSize="16" FontWeight="SemiBold" />
                                 <TextBlock x:Name="LinkStateText" Style="{StaticResource SubHeaderTextStyle}" />

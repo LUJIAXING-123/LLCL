@@ -12,7 +12,6 @@ public sealed partial class LinkPage : Page
 {
     private readonly ObservableCollection<PeerItem> _peers = new();
     private readonly ObservableCollection<LanItem> _lan = new();
-    private readonly ObservableCollection<HistoryItem> _history = new();
     private List<LanWorld> _worlds = [];
     private bool _loaded;
 
@@ -23,15 +22,11 @@ public sealed partial class LinkPage : Page
         InitializeComponent();
 
         PeerList.ItemsSource = _peers;
-        LanList.ItemsSource = _lan;
-        HistoryList.ItemsSource = _history;
-        WorldComboBox.SelectionChanged += WorldComboBox_SelectionChanged;
 
         Link.OnStateChanged += OnLinkStateChanged;
         Link.OnPeersUpdated += OnPeersUpdated;
         Link.OnStatusUpdated += OnStatusUpdated;
         Link.OnWorldFound += OnWorldFound;
-        RoomHistory.Changed += RefreshHistory;
 
         Loaded += (_, _) =>
         {
@@ -49,10 +44,6 @@ public sealed partial class LinkPage : Page
         if (string.IsNullOrWhiteSpace(name)) name = LauncherConfig.Current.OfflineUserName;
         HostNameBox.Text = name;
 
-        var suggested = FriendlyError.SuggestPort(25565);
-        ManualPortBox.Value = suggested > 0 ? suggested : 25565;
-
-        RefreshHistory();
         UpdateStatusPanel(Link.Status);
 
         try
@@ -96,20 +87,55 @@ public sealed partial class LinkPage : Page
     {
         Dispatch(() =>
         {
-            _peers.Clear();
-            foreach (var peer in peers)
-            {
-                _peers.Add(new PeerItem
+            // 自己和房主都不进成员列表：
+            // 自己出现在里面很怪，房主已经在上面的状态卡里单独展示。
+            var selfIp = Link.Status.LocalVirtualIp;
+
+            var wanted = peers
+                .Where(p => !p.IsHost)
+                .Where(p => string.IsNullOrWhiteSpace(selfIp) ||
+                            !string.Equals(p.Ipv4, selfIp, StringComparison.OrdinalIgnoreCase))
+                .Select(p => new PeerItem
                 {
-                    Name = peer.DisplayName,
-                    Info = $"{(peer.IsHost ? "房主" : "成员")} · {peer.Ping}ms"
-                });
-            }
+                    Name = p.DisplayName,
+                    Info = $"{p.Ping}ms"
+                })
+                .ToList();
+
+            // 增量更新而不是 Clear 后重建。
+            // 队列每两秒刷新一次，清空重建会让 ListView 反复重绘，
+            // 观感上就是成员列表一直在闪。
+            SyncPeers(wanted);
 
             PeerSection.Visibility = _peers.Count > 0 && Link.State == LinkState.Connected
                 ? Visibility.Visible
                 : Visibility.Collapsed;
         });
+    }
+
+    /// <summary>按名称做增删改，避免整表重建。</summary>
+    private void SyncPeers(List<PeerItem> wanted)
+    {
+        // 删除已消失的成员
+        for (var i = _peers.Count - 1; i >= 0; i--)
+        {
+            if (!wanted.Any(w => w.Name == _peers[i].Name))
+                _peers.RemoveAt(i);
+        }
+
+        // 追加新成员并更新已有成员的信息
+        foreach (var item in wanted)
+        {
+            var existing = _peers.FirstOrDefault(p => p.Name == item.Name);
+            if (existing is null)
+            {
+                _peers.Add(item);
+            }
+            else if (existing.Info != item.Info)
+            {
+                existing.Info = item.Info;
+            }
+        }
     }
 
     private void UpdateStatusPanel(LinkStatus status)
@@ -183,8 +209,6 @@ public sealed partial class LinkPage : Page
 
     #region 创建房间
 
-    private async void Scan_Click(object sender, RoutedEventArgs e) => await ScanAsync();
-
     private async Task ScanAsync()
     {
         Dispatch(() => BusyRing.IsActive = true);
@@ -193,28 +217,9 @@ public sealed partial class LinkPage : Page
             _lan.Clear();
             _worlds = await Link.ScanLanAsync(TimeSpan.FromSeconds(6));
 
-            WorldComboBox.Items.Clear();
-            foreach (var world in _worlds)
-            {
-                WorldComboBox.Items.Add(world.Display);
-                _lan.Add(new LanItem
-                {
-                    Display = world.Display,
-                    Source = world.Source == "broadcast" ? "广播" : "扫描",
-                    Port = world.Port
-                });
-            }
-
-            if (_worlds.Count > 0)
-            {
-                WorldComboBox.SelectedIndex = 0;
-                ManualPortBox.Value = _worlds[0].Port;
-                PortHintText.Text = $"已发现 {_worlds.Count} 个世界，端口已自动填入。";
-            }
-            else
-            {
-                PortHintText.Text = "未发现局域网世界。可在 Minecraft 中开放后重试，或直接手动填写端口。";
-            }
+            PortHintText.Text = _worlds.Count > 0
+                ? $"已发现 {_worlds.Count} 个局域网世界，可直接创建房间。"
+                : "未发现局域网世界。请先在 Minecraft 里「对局域网开放」，再回到这里创建房间。";
         }
         catch (Exception ex)
         {
@@ -228,23 +233,33 @@ public sealed partial class LinkPage : Page
 
     private async void Create_Click(object sender, RoutedEventArgs e)
     {
-        var port = double.IsNaN(ManualPortBox.Value) ? 0 : (int)ManualPortBox.Value;
-
-        if (port is <= 0 or > 65535)
+        // 端口不再让用户手填：先重新扫描，取当前真正开放的那个世界。
+        // 每次「对局域网开放」游戏都会换端口，让用户自己抄反而更容易出错。
+        Dispatch(() => BusyRing.IsActive = true);
+        try
         {
-            ShowStatus("请填写 1 到 65535 之间的端口号。", InfoBarSeverity.Warning);
+            _worlds = await Link.ScanLanAsync(TimeSpan.FromSeconds(6));
+        }
+        catch (Exception ex)
+        {
+            Dispatch(() => BusyRing.IsActive = false);
+            ShowStatus(FriendlyError.ToText(ex), InfoBarSeverity.Error);
+            return;
+        }
+        Dispatch(() => BusyRing.IsActive = false);
+
+        if (_worlds.Count == 0)
+        {
+            ShowStatus(
+                "没有检测到已开放的局域网世界。\n" +
+                "请先在游戏里 ESC →「对局域网开放」，看到聊天栏提示端口后，再回来点创建房间。",
+                InfoBarSeverity.Warning);
             return;
         }
 
-        if (!FriendlyError.IsPortReachable(port, out var portError))
-        {
-            ShowStatus(portError ?? "端口不可用", InfoBarSeverity.Error);
-            return;
-        }
+        // 多个世界时取第一个
+        var port = _worlds[0].Port;
 
-        // 仅能连通不代表是游戏端口：8848 之类的端口上可能有别的服务，
-        // 连接能建立，但加入方握手时会被重置。
-        // 这里按 Minecraft 协议确认一次，避免把错误端口写进房间码。
         Dispatch(() => BusyRing.IsActive = true);
         var isMinecraft = await MinecraftPing.PingAsync(port, TimeSpan.FromSeconds(4), default);
         Dispatch(() => BusyRing.IsActive = false);
@@ -252,8 +267,7 @@ public sealed partial class LinkPage : Page
         if (!isMinecraft)
         {
             ShowStatus(
-                $"端口 {port} 可以连通，但没有响应 Minecraft 的状态查询，多半不是游戏端口。" +
-                "请在游戏里「对局域网开放」，并使用聊天栏显示的那个端口。",
+                $"端口 {port} 可以连通，但没有响应 Minecraft 的状态查询，多半不是游戏端口。",
                 InfoBarSeverity.Error);
             return;
         }
@@ -267,25 +281,10 @@ public sealed partial class LinkPage : Page
 
         if (ok)
         {
-            // 房间码里记住了这个端口。房主重新对局域网开放会让端口变化，
-            // 届时旧房间码失效，需要重新创建房间。
             PortHintText.Text =
-                $"房间码已包含端口 {port}。如果你重新对局域网开放，端口会变化，需要重新创建房间。";
+                $"房间码已包含端口 {port}。如果重新对局域网开放，端口会变化，需要重新创建房间。";
             UpdateStatusPanel(Link.Status);
         }
-    }
-
-    private void WorldComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (WorldComboBox.SelectedIndex >= 0 && WorldComboBox.SelectedIndex < _worlds.Count)
-            ManualPortBox.Value = _worlds[WorldComboBox.SelectedIndex].Port;
-    }
-
-    private void Lan_ItemClick(object sender, ItemClickEventArgs e)
-    {
-        if (e.ClickedItem is not LanItem item) return;
-        ManualPortBox.Value = item.Port;
-        PortHintText.Text = $"已选择端口 {item.Port}，可点击“创建房间”。";
     }
 
     #endregion
@@ -314,14 +313,7 @@ public sealed partial class LinkPage : Page
     {
         var code = RoomCodeBox.Text?.Trim() ?? string.Empty;
 
-        // 端口覆盖优先，用于房间码里的端口已失效（房主重开世界）的情况
-        int? portOverride = null;
-        if (!double.IsNaN(OverridePortBox.Value) && OverridePortBox.Value > 0)
-        {
-            portOverride = (int)OverridePortBox.Value;
-        }
-
-        var parsed = RoomCode.Parse(code, out var error, portOverride);
+        var parsed = RoomCode.Parse(code, out var error);
         if (parsed is null)
         {
             JoinHintText.Text = error ?? "房间码无效";
@@ -331,47 +323,27 @@ public sealed partial class LinkPage : Page
         var name = LauncherConfig.Current.LobbyUserName;
         if (string.IsNullOrWhiteSpace(name)) name = LauncherConfig.Current.OfflineUserName;
 
-        Dispatch(() => BusyRing.IsActive = true);
-        var ok = await Link.JoinRoomAsync(code, name, portOverride);
-        Dispatch(() => BusyRing.IsActive = false);
+        // 加入期间禁用按钮，避免连点启动两套内核
+        Dispatch(() =>
+        {
+            BusyRing.IsActive = true;
+            JoinButton.IsEnabled = false;
+        });
+
+        var ok = await Link.JoinRoomAsync(code, name);
+
+        Dispatch(() =>
+        {
+            BusyRing.IsActive = false;
+            JoinButton.IsEnabled = true;
+        });
 
         if (ok)
         {
             RoomCodeBox.Text = string.Empty;
-            OverridePortBox.Value = double.NaN;
             JoinHintText.Text = string.Empty;
             UpdateStatusPanel(Link.Status);
         }
-    }
-
-    private void History_ItemClick(object sender, ItemClickEventArgs e)
-    {
-        if (e.ClickedItem is not HistoryItem item) return;
-        RoomCodeBox.Text = item.Code;
-        RoomCodeBox.Focus(FocusState.Programmatic);
-    }
-
-    private void ClearHistory_Click(object sender, RoutedEventArgs e)
-    {
-        RoomHistory.Clear();
-        RefreshHistory();
-    }
-
-    private void RefreshHistory()
-    {
-        Dispatch(() =>
-        {
-            _history.Clear();
-            foreach (var entry in RoomHistory.Entries)
-            {
-                _history.Add(new HistoryItem
-                {
-                    Code = entry.Code,
-                    Summary = entry.Summary,
-                    Time = entry.TimeDisplay
-                });
-            }
-        });
     }
 
     #endregion

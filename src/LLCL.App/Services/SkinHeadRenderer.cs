@@ -105,8 +105,14 @@ public static class SkinHeadRenderer
     }
 
     /// <summary>
-    /// 把皮肤图上 (u,v) 起 8×8 的区域按最近邻放大并写入输出缓冲。
+    /// 把皮肤图上 (u,v) 起 8×8 的区域按最近邻放大并叠加到输出缓冲。
     /// 最近邻可以保持像素风，不会因为插值糊掉。
+    /// <para>
+    /// 必须做 alpha 叠加而不是直接拷贝：帽子层大部分像素是透明的，
+    /// 直接覆盖会把底下的脸擦掉，结果「有装饰的皮肤只剩装饰，看不到脸」。
+    /// 缓冲区是预乘 alpha（Premultiplied Bgra8），
+    /// 所以 source-over 合成就是 dst = src + dst × (1 - srcAlpha)。
+    /// </para>
     /// </summary>
     private static void BlitScaled(byte[] src, int srcStride, int unit, int u, int v,
         byte[] dst, int dstStride, int dx, int dy, int dw, int dh)
@@ -126,10 +132,25 @@ public static class SkinHeadRenderer
                 var si = rowBase + sx * 4;
                 var di = (dy + y) * dstStride + (dx + x) * 4;
 
-                dst[di + 0] = src[si + 0];
-                dst[di + 1] = src[si + 1];
-                dst[di + 2] = src[si + 2];
-                dst[di + 3] = src[si + 3];
+                var sa = src[si + 3];
+
+                // 全透明像素直接跳过，否则会把下层擦成透明
+                if (sa == 0) continue;
+
+                if (sa == 255)
+                {
+                    dst[di + 0] = src[si + 0];
+                    dst[di + 1] = src[si + 1];
+                    dst[di + 2] = src[si + 2];
+                    dst[di + 3] = 255;
+                    continue;
+                }
+
+                var inv = 255 - sa;
+                dst[di + 0] = (byte)Math.Min(255, src[si + 0] + dst[di + 0] * inv / 255);
+                dst[di + 1] = (byte)Math.Min(255, src[si + 1] + dst[di + 1] * inv / 255);
+                dst[di + 2] = (byte)Math.Min(255, src[si + 2] + dst[di + 2] * inv / 255);
+                dst[di + 3] = (byte)Math.Min(255, sa + dst[di + 3] * inv / 255);
             }
         }
     }

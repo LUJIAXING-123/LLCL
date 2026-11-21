@@ -167,140 +167,50 @@
                     </StackPanel>
                 </Border>
 
-                <!-- ===== 创建房间 ===== -->
-                <Border x:Name="CreateCard" Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="12">
-                        <TextBlock Text="创建房间" FontSize="16" FontWeight="SemiBold" />
-                        <TextBlock Style="{StaticResource SubHeaderTextStyle}"
-                                   Text="在 Minecraft 中打开“对局域网开放”，记下游戏显示的端口；扫描可自动发现，也可手动填写。" />
+                <!-- ===== 创建 / 加入：横排 ===== -->
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
 
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="160" />
-                            </Grid.ColumnDefinitions>
-                            <ComboBox x:Name="WorldComboBox" Header="局域网世界（扫描结果）"
-                                      HorizontalAlignment="Stretch" />
-                            <Button Grid.Column="1" Content="扫描" Click="Scan_Click"
-                                    VerticalAlignment="Bottom" />
-                            <NumberBox Grid.Column="2" x:Name="ManualPortBox" Header="手动端口"
-                                       Minimum="1" Maximum="65535" Value="25565"
-                                       SpinButtonPlacementMode="Inline" VerticalAlignment="Bottom" />
-                        </Grid>
+                    <Border x:Name="CreateCard" Style="{StaticResource CardStyle}">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="创建房间" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Style="{StaticResource SubHeaderTextStyle}" TextWrapping="Wrap"
+                                       Text="先在 Minecraft 里「对局域网开放」，再点下面的按钮。端口会自动识别。" />
 
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
                             <TextBox x:Name="HostNameBox" Header="你的昵称"
                                      PlaceholderText="留空则使用离线用户名" />
-                            <Button Grid.Column="1" Content="创建房间"
-                                    Style="{StaticResource AccentButtonStyle}"
-                                    VerticalAlignment="Bottom" Click="Create_Click" />
-                        </Grid>
 
-                        <TextBlock x:Name="PortHintText" FontSize="12"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   TextWrapping="Wrap" />
-                    </StackPanel>
-                </Border>
+                            <Button Content="创建房间" HorizontalAlignment="Stretch"
+                                    Style="{StaticResource AccentButtonStyle}" Click="Create_Click" />
 
-                <!-- ===== 加入房间 ===== -->
-                <Border x:Name="JoinCard" Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="12">
-                        <TextBlock Text="加入房间" FontSize="16" FontWeight="SemiBold" />
-                        <TextBlock Style="{StaticResource SubHeaderTextStyle}"
-                                   Text="粘贴好友发来的房间码即可加入，端口已包含在房间码中。" />
+                            <TextBlock x:Name="PortHintText" FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
 
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox x:Name="RoomCodeBox" PlaceholderText="房间码，例如 ABCDE-FGHIJ-KLMNO"
+                    <Border Grid.Column="1" x:Name="JoinCard" Style="{StaticResource CardStyle}">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="加入房间" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Style="{StaticResource SubHeaderTextStyle}" TextWrapping="Wrap"
+                                       Text="粘贴好友发来的房间码即可加入，端口已包含在房间码中。" />
+
+                            <TextBox x:Name="RoomCodeBox" Header="房间码"
+                                     PlaceholderText="ABCDE-FGHIJ-KLMNO-PQRST-UVWXY-Z1"
                                      TextChanged="RoomCodeBox_TextChanged" />
-                            <Button Grid.Column="1" x:Name="JoinButton" Content="加入"
+
+                            <Button x:Name="JoinButton" Content="加入" HorizontalAlignment="Stretch"
                                     Style="{StaticResource AccentButtonStyle}" Click="Join_Click" />
-                        </Grid>
 
-                        <TextBlock x:Name="JoinHintText" FontSize="12"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   TextWrapping="Wrap" />
-
-                        <!--
-                          房主的局域网端口由游戏随机分配，每次「对局域网开放」都会变，
-                          而房间码里存的是建房那一刻的端口。
-                          房主重开世界后房间码里的端口会失效，这里允许手动覆盖。
-                        -->
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="房主游戏端口（可选）" FontSize="12" VerticalAlignment="Center"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                            <NumberBox x:Name="OverridePortBox" Width="130" Minimum="1" Maximum="65535"
-                                       SpinButtonPlacementMode="Hidden"
-                                       PlaceholderText="留空用房间码里的" />
+                            <TextBlock x:Name="JoinHintText" FontSize="12"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" />
                         </StackPanel>
-
-                        <StackPanel Spacing="6">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="最近房间" FontSize="13" FontWeight="SemiBold" />
-                                <HyperlinkButton Grid.Column="1" Content="清空" Padding="0"
-                                                 Click="ClearHistory_Click" />
-                            </Grid>
-                            <ListView x:Name="HistoryList" SelectionMode="None" MaxHeight="150"
-                                      IsItemClickEnabled="True" ItemClick="History_ItemClick">
-                                <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="local:HistoryItem">
-                                        <Grid Padding="0,4" ColumnSpacing="12">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel>
-                                                <TextBlock Text="{x:Bind Code}" FontFamily="Consolas" FontSize="13" />
-                                                <TextBlock Text="{x:Bind Summary}" FontSize="11"
-                                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="{x:Bind Time}" FontSize="11"
-                                                       VerticalAlignment="Center"
-                                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-
-                <!-- ===== 局域网发现 ===== -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="6">
-                        <TextBlock Text="局域网世界" FontSize="16" FontWeight="SemiBold" />
-                        <TextBlock Style="{StaticResource SubHeaderTextStyle}"
-                                   Text="自动发现同一局域网中已开放的多人游戏，点击即可填入端口。" />
-                        <ListView x:Name="LanList" SelectionMode="None" MaxHeight="150"
-                                  IsItemClickEnabled="True" ItemClick="Lan_ItemClick">
-                            <ListView.ItemTemplate>
-                                <DataTemplate x:DataType="local:LanItem">
-                                    <Grid Padding="0,4" ColumnSpacing="12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{x:Bind Display}" FontSize="13" />
-                                        <TextBlock Grid.Column="1" Text="{x:Bind Source}" FontSize="11"
-                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ListView.ItemTemplate>
-                        </ListView>
-                    </StackPanel>
-                </Border>
+                    </Border>
+                </Grid>
             </StackPanel>
         </ScrollViewer>
 

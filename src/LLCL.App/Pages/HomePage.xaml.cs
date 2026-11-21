@@ -6,6 +6,7 @@ using LLCL.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 
 namespace LLCL.Pages;
 
@@ -82,17 +83,11 @@ public sealed partial class HomePage : Page
         var entries = VersionManager.ScanAll().Where(e => !e.IsBroken).ToList();
         var versions = entries.Select(e => e.Id).ToList();
 
-        _suppressSelection = true;
-        VersionComboBox.Items.Clear();
-        foreach (var entry in entries)
-            VersionComboBox.Items.Add($"{entry.DisplayName}   [{entry.Id}]");
-
         if (entries.Count > 0)
         {
             var index = versions.IndexOf(config.LastInstance ?? string.Empty);
 
-            // 上次使用的版本可能已被删除：回退到第一项并同步配置，
-            // 避免下拉框显示与实际选择不一致（列表"错乱"的观感多源于此）
+            // 上次使用的版本可能已被删除：回退到第一项并同步配置
             if (index < 0)
             {
                 index = 0;
@@ -100,8 +95,8 @@ public sealed partial class HomePage : Page
                 config.Save();
             }
 
-            VersionComboBox.SelectedIndex = index;
-            CurrentVersionText.Text = $"将启动 {entries[index].DisplayName}";
+            _activeVersionId = versions[index];
+            CurrentVersionLine.Text = $"将启动 {entries[index].DisplayName}";
         }
         else
         {
@@ -112,10 +107,9 @@ public sealed partial class HomePage : Page
                 config.Save();
             }
 
-            CurrentVersionText.Text = "尚未安装任何版本，请先前往下载中心";
+            _activeVersionId = null;
+            CurrentVersionLine.Text = "尚未安装任何版本，请先到「版本列表」新建安装";
         }
-
-        _suppressSelection = false;
 
         var broken = VersionManager.ScanAll().Count(e => e.IsBroken);
         VersionCountText.Text = entries.Count == 0
@@ -247,25 +241,9 @@ public sealed partial class HomePage : Page
     }
 
     private void AccountButton_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("settings");
-    private void VersionComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressSelection) return;
-        var id = SelectedVersionId();
-        if (id is null) return;
 
-        LauncherConfig.Current.LastInstance = id;
-        LauncherConfig.Current.Save();
-        CurrentVersionText.Text = $"将启动 {DisplayOf(id)}";
-    }
-
-    /// <summary>从下拉框当前项取出真实版本 ID。</summary>
-    private string? SelectedVersionId()
-    {
-        if (VersionComboBox.SelectedIndex < 0) return null;
-        var ordered = VersionManager.ScanAll().Where(e => !e.IsBroken).ToList();
-        if (VersionComboBox.SelectedIndex >= ordered.Count) return null;
-        return ordered[VersionComboBox.SelectedIndex].Id;
-    }
+    /// <summary>当前要启动的版本。版本选择已移到版本列表页，这里只缓存结果。</summary>
+    private string? _activeVersionId;
 
     private static string DisplayOf(string id)
     {
@@ -275,7 +253,7 @@ public sealed partial class HomePage : Page
 
     private async void LaunchButton_Click(object sender, RoutedEventArgs e)
     {
-        var version = SelectedVersionId();
+        var version = _activeVersionId;
         if (version is null)
         {
             await ShowAsync("还没有版本", "请先在下载页安装一个 Minecraft 版本。");
@@ -320,13 +298,42 @@ public sealed partial class HomePage : Page
         }
     }
 
-    /// <summary>启动阶段回调，更新按钮下的提示文字。</summary>
+    /// <summary>启动阶段回调，更新提示文字与进度。</summary>
     private void OnLaunchStage(GameLaunchService.LaunchStage stage)
     {
         Dispatch(() =>
         {
             LaunchStageText.Text = stage.Message;
+
+            // 进度按阶段推进，而不是直接跳到新值。
+            // 启动阶段的总耗时里，准备命令那一段几乎没有可报告的进度，
+            // 直接赋值会让进度条突然弹到一大截，看着像卡住了又忽然好了。
+            var target = Math.Clamp(stage.Ratio, 0, 1);
+            if (target > LaunchProgress.Value)
+            {
+                LaunchProgress.IsIndeterminate = false;
+                AnimateProgressTo(target);
+            }
         });
+    }
+
+    /// <summary>把进度条平滑推到目标值。</summary>
+    private void AnimateProgressTo(double target)
+    {
+        var animation = new DoubleAnimation
+        {
+            To = target,
+            Duration = TimeSpan.FromMilliseconds(320),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+            EnableDependentAnimation = true
+        };
+
+        Storyboard.SetTarget(animation, LaunchProgress);
+        Storyboard.SetTargetProperty(animation, "Value");
+
+        var storyboard = new Storyboard();
+        storyboard.Children.Add(animation);
+        storyboard.Begin();
     }
 
     /// <summary>进入/退出启动忙碌状态：按钮转圈，进度条常驻直到窗口出现。</summary>
@@ -340,12 +347,39 @@ public sealed partial class HomePage : Page
         {
             LaunchButton.Content = "启动中…";
             LaunchStageText.Text = "正在准备…";
+
+            // 未知阶段用不确定态，避免长时间停在 0% 让人以为没反应
+            LaunchProgress.IsIndeterminate = true;
+            LaunchProgress.Value = 0;
+
+            FadeIn(LaunchProgress);
         }
         else
         {
             LaunchButton.Content = "启动";
             LaunchStageText.Text = string.Empty;
+            LaunchProgress.Value = 0;
         }
+    }
+
+    /// <summary>让刚出现的进度条淡入，避免直接闪现。</summary>
+    private static void FadeIn(UIElement element)
+    {
+        element.Opacity = 0;
+
+        var fade = new DoubleAnimation
+        {
+            From = 0, To = 1,
+            Duration = TimeSpan.FromMilliseconds(200),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+
+        Storyboard.SetTarget(fade, element);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+
+        var storyboard = new Storyboard();
+        storyboard.Children.Add(fade);
+        storyboard.Begin();
     }
 
     private async Task ShowAsync(string title, string message)
@@ -369,11 +403,12 @@ public sealed partial class HomePage : Page
     }
 
     private void GoDownload_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("download");
+    private void GoVersions_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("versions");
     private void GoLink_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("link");
 
     private async void ManageVersion_Click(object sender, RoutedEventArgs e)
     {
-        var version = SelectedVersionId();
+        var version = _activeVersionId;
         if (version is null)
         {
             await ShowAsync("还没有版本", "请先在下载页安装一个 Minecraft 版本。");
@@ -383,6 +418,8 @@ public sealed partial class HomePage : Page
         MainWindow.Instance?.ShowVersionSettings(version);
     }
 }
+
+
 
 
 

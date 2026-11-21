@@ -35,7 +35,11 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += (_, e) => ReportFatal(e.ExceptionObject as Exception, "AppDomain");
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
-            ReportFatal(e.Exception, "TaskScheduler");
+            // 未观察的任务异常只记日志，不弹窗。
+            // 这类异常多半是"连接/探测被取消"之类的收尾噪声，
+            // 进程本身还能正常工作；弹窗只会吓到用户，
+            // 而且一次操作里往往连续出现好几条，导致连环弹窗。
+            LLCL.Core.Logger.Error(e.Exception, "未观察的任务异常");
             e.SetObserved();
         };
         UnhandledException += (_, e) =>
@@ -117,3 +121,4 @@ public partial class App : Application
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int MessageBox(nint hWnd, string text, string caption, uint type);
 }
+

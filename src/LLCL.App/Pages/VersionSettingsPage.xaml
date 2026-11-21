@@ -38,7 +38,8 @@
                 <NavigationViewItem Content="概览" Tag="overview" />
                 <NavigationViewItem Content="启动设置" Tag="launch" />
                 <NavigationViewItem Content="游戏设置" Tag="game" />
-                <NavigationViewItem Content="mods 管理" Tag="mods" />
+                <NavigationViewItem Content="文件夹" Tag="folders" />
+                <NavigationViewItem Content="整合包" Tag="modpack" />
                 <NavigationViewItem Content="其他" Tag="other" />
             </NavigationView.MenuItems>
             <Frame x:Name="SettingsFrame" />

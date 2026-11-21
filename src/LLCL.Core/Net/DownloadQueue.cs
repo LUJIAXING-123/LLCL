@@ -94,6 +94,16 @@ public static class DownloadQueue
     private static readonly SemaphoreSlim _runnerGate = new(1, 1);
     private static readonly object _lock = new();
 
+    /// <summary>
+    /// 全局暂停闸门（Set = 正在运行）。
+    /// <para>
+    /// 安装整合包、补全版本文件这些流程会在内部自行创建 FileDownloader，
+    /// 队列拿不到那些实例，只暂停自己持有的下载器等于什么也没停住。
+    /// 所以暂停改成全局生效：队列放下闸门，所有下载器在传输循环里都会等待。
+    /// </para>
+    /// </summary>
+    internal static readonly ManualResetEventSlim AmbientResume = new(true);
+
     /// <summary>任务列表变化（新增 / 移除 / 状态更新）。</summary>
     public static event Action? Changed;
 
@@ -228,6 +238,10 @@ public static class DownloadQueue
             syncing = false;
             task.Cts?.Dispose();
             task.Cts = null;
+
+            // 任务结束时放开全局闸门，否则后续下载会一直卡在暂停等待里
+            AmbientResume.Set();
+
             _runnerGate.Release();
 
             // 终态必须广播一次，否则界面会停留在“下载中”
@@ -267,6 +281,10 @@ public static class DownloadQueue
 
                 task.Downloader?.Pause();
                 task.State = DownloadState.Paused;
+
+                // 让所有下载器（含内部自行创建的那些）一起停下来
+                AmbientResume.Reset();
+
                 affected.Add(task);
             }
         }
@@ -292,6 +310,12 @@ public static class DownloadQueue
                 affected.Add(task);
             }
         }
+
+        // 只要还有任务处于暂停，就不放开全局闸门；
+        // 该继续的任务靠自己的下载器闸门恢复。
+        var stillPaused = false;
+        lock (_lock) stillPaused = _tasks.Any(t => t.State == DownloadState.Paused);
+        if (!stillPaused) AmbientResume.Set();
 
         foreach (var task in affected) _Notify(task);
         if (affected.Count == 0) Changed?.Invoke();

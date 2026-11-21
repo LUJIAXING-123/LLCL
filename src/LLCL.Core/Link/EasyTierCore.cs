@@ -839,9 +839,12 @@ public sealed class PeerInfo
     public string Ipv4 { get; set; } = string.Empty;
     [System.Text.Json.Serialization.JsonPropertyName("cost")]
     public string Cost { get; set; } = string.Empty;
-    [System.Text.Json.Serialization.JsonPropertyName("ping")]
+    // 字段名必须与 easytier-cli -o json peer 的实际输出一致。
+    // 早先写成 ping / loss，而内核实际给出的是 lat_ms / loss_rate，
+    // 反序列化后恒为默认值，界面上的延迟就一直显示成「—」。
+    [System.Text.Json.Serialization.JsonPropertyName("lat_ms")]
     public string Ping { get; set; } = "-";
-    [System.Text.Json.Serialization.JsonPropertyName("loss")]
+    [System.Text.Json.Serialization.JsonPropertyName("loss_rate")]
     public string Loss { get; set; } = "-";
     [System.Text.Json.Serialization.JsonPropertyName("nat_type")]
     public string? NatType { get; set; }

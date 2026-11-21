@@ -34,7 +34,7 @@ public sealed partial class VersionSettingsPage : Page
             Show(tag);
     }
 
-    private void Back_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("download");
+    private void Back_Click(object sender, RoutedEventArgs e) => MainWindow.Instance?.Navigate("versions");
 
     private async void Launch_Click(object sender, RoutedEventArgs e)
     {
@@ -58,7 +58,10 @@ public sealed partial class VersionSettingsPage : Page
         {
             case "launch": BuildLaunch(panel); break;
             case "game": BuildGame(panel); break;
-            case "mods": BuildMods(panel); break;
+            // 文件夹管理从「游戏设置」里独立出来，取代原来的 mods 管理页
+            case "folders": BuildFolders(panel); break;
+            // 整合包导出独立成页，不再塞在「其他」里
+            case "modpack": BuildModpack(panel); break;
             case "other": BuildOther(panel); break;
             default: BuildOverview(panel); break;
         }
@@ -442,16 +445,40 @@ public sealed partial class VersionSettingsPage : Page
             "留空（跟随规则）时：版本目录下已有 mods 或存档会自动开启，否则按全局方案判定。"));
         panel.Children.Add(MakeIsolationSelector());
         if (_isolationStatus is not null) panel.Children.Add(_isolationStatus);
+    }
 
-        panel.Children.Add(Header("目录"));
+    /// <summary>
+    /// 文件夹管理。原来塞在「游戏设置」里，和窗口、隔离混在一起不方便，
+    /// 现在独立成页并取代了旧的 mods 管理页。
+    /// </summary>
+    private void BuildFolders(StackPanel panel)
+    {
+        var gameDir = _settings.GetGameDir(_versionId);
+
+        panel.Children.Add(Header("游戏目录"));
+        panel.Children.Add(Hint(gameDir));
+
+        var rootRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var openRoot = new Button { Content = "打开游戏目录" };
+        openRoot.Click += (_, _) => OpenPath(gameDir);
+        rootRow.Children.Add(openRoot);
+
+        var copyRoot = new Button { Content = "复制路径" };
+        copyRoot.Click += (_, _) => CopyText(gameDir);
+        rootRow.Children.Add(copyRoot);
+        panel.Children.Add(rootRow);
+
+        panel.Children.Add(Header("分类文件夹"));
+
         var dirs = new StackPanel { Spacing = 6 };
         foreach (var (name, sub) in new[]
                  {
                      ("mods", "mods"), ("saves", "saves"), ("resourcepacks", "resourcepacks"),
-                     ("shaderpacks", "shaderpacks"), ("config", "config"), ("logs", "logs")
+                     ("shaderpacks", "shaderpacks"), ("config", "config"), ("logs", "logs"),
+                     ("crash-reports", "crash-reports")
                  })
         {
-            var path = Path.Combine(_settings.GetGameDir(_versionId), sub);
+            var path = Path.Combine(gameDir, sub);
             var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
             var button = new Button { Content = name };
             button.Click += (_, _) => OpenPath(path);
@@ -467,6 +494,20 @@ public sealed partial class VersionSettingsPage : Page
         }
 
         panel.Children.Add(dirs);
+    }
+
+    private void CopyText(string text)
+    {
+        try
+        {
+            var package = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            package.SetText(text);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"复制失败: {ex.Message}");
+        }
     }
 
     #endregion
@@ -551,48 +592,17 @@ public sealed partial class VersionSettingsPage : Page
 
     #endregion
 
-    #region 其他
+    #region 整合包
 
-    private void BuildOther(StackPanel panel)
+    /// <summary>
+    /// 整合包导出。独立成页，避免和其它零散设置挤在一起。
+    /// </summary>
+    private void BuildModpack(StackPanel panel)
     {
-        panel.Children.Add(Header("重命名"));
-
-        var renameBox = new TextBox
-        {
-            Header = "新的版本 ID",
-            Text = _versionId,
-            PlaceholderText = "例如 1.21.1-Fabric"
-        };
-        panel.Children.Add(renameBox);
-
-        var renameButton = new Button { Content = "重命名版本", Margin = new Thickness(0, 4, 0, 0) };
-        renameButton.Click += async (_, _) =>
-        {
-            var newId = renameBox.Text.Trim();
-            if (newId == _versionId) return;
-
-            if (!VersionManager.Rename(_versionId, newId, out var error))
-            {
-                await ShowAsync("重命名失败", error ?? "未知错误");
-                return;
-            }
-
-            await ShowAsync("重命名成功", $"版本已重命名为 {newId}");
-            MainWindow.Instance?.Navigate("download");
-        };
-        panel.Children.Add(renameButton);
-
-        panel.Children.Add(Header("整合包"));
-
-        var packHint = new TextBlock
-        {
-            Text = "把此版本连同 mods、配置、资源包一起打包成整合包（Modrinth 格式），" +
-                   "可直接分享给他人安装。",
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap,
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"]
-        };
-        panel.Children.Add(packHint);
+        panel.Children.Add(Header("导出为整合包"));
+        panel.Children.Add(Hint(
+            "把此版本连同 mods、配置、资源包一起打包成整合包（Modrinth 格式），可直接分享给他人安装。\n" +
+            "也能拖进本启动器窗口直接安装。"));
 
         var packNameBox = new TextBox
         {
@@ -637,14 +647,9 @@ public sealed partial class VersionSettingsPage : Page
         };
         panel.Children.Add(bundleFiles);
 
-        panel.Children.Add(new TextBlock
-        {
-            Text = "关闭「打包文件」时，整合包只记录每个文件的校验值，对方需要自行准备同名文件，" +
-                   "体积小但可用性差，一般保持开启。",
-            FontSize = 12,
-            TextWrapping = TextWrapping.Wrap,
-            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"]
-        });
+        panel.Children.Add(Hint(
+            "关闭「打包文件」时只记录校验值并提供下载地址，包体积小；" +
+            "无法反查到来源的文件仍会被打包，保证可安装。"));
 
         var exportButton = new Button
         {
@@ -656,6 +661,40 @@ public sealed partial class VersionSettingsPage : Page
             packNameBox.Text, packVersionBox.Text,
             includeSaves.IsOn, includeConfig.IsOn, bundleFiles.IsOn);
         panel.Children.Add(exportButton);
+    }
+
+    #endregion
+
+    #region 其他
+
+    private void BuildOther(StackPanel panel)
+    {
+        panel.Children.Add(Header("重命名"));
+
+        var renameBox = new TextBox
+        {
+            Header = "新的版本 ID",
+            Text = _versionId,
+            PlaceholderText = "例如 1.21.1-Fabric"
+        };
+        panel.Children.Add(renameBox);
+
+        var renameButton = new Button { Content = "重命名版本", Margin = new Thickness(0, 4, 0, 0) };
+        renameButton.Click += async (_, _) =>
+        {
+            var newId = renameBox.Text.Trim();
+            if (newId == _versionId) return;
+
+            if (!VersionManager.Rename(_versionId, newId, out var error))
+            {
+                await ShowAsync("重命名失败", error ?? "未知错误");
+                return;
+            }
+
+            await ShowAsync("重命名成功", $"版本已重命名为 {newId}");
+            MainWindow.Instance?.Navigate("versions");
+        };
+        panel.Children.Add(renameButton);
 
         panel.Children.Add(Header("危险操作"));
 
@@ -688,7 +727,7 @@ public sealed partial class VersionSettingsPage : Page
             }
 
             // 删除成功后回到下载页；版本列表由 VersionsChanged 事件自动刷新
-            MainWindow.Instance?.Navigate("download");
+            MainWindow.Instance?.Navigate("versions");
         };
         panel.Children.Add(deleteButton);
     }
@@ -786,6 +825,7 @@ public sealed partial class VersionSettingsPage : Page
         return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 }
+
 
 
 

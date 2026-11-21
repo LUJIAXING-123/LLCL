@@ -406,9 +406,15 @@ public sealed class FileDownloader
 
     private async Task _WaitIfPausedAsync(CancellationToken ct)
     {
-        if (!_paused) return;
-        while (!_resumeGate.IsSet && !ct.IsCancellationRequested)
+        while (true)
         {
+            // 自己的闸门被关闭（本下载器被暂停），
+            // 或队列的全局闸门被关闭（用户暂停了整个任务）时都要等待。
+            var ownBlocked = _paused && !_resumeGate.IsSet;
+            var queueBlocked = !DownloadQueue.AmbientResume.IsSet;
+
+            if (!ownBlocked && !queueBlocked) break;
+
             await Task.Delay(100, ct).ConfigureAwait(false);
         }
 

@@ -5,6 +5,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using WinRT.Interop;
 using LLCL.Core;
 using LLCL.Pages;
@@ -305,6 +306,7 @@ public sealed partial class MainWindow : Window
             {
                 "home" => new HomePage(),
                 "download" => new DownloadPage(),
+                "versions" => new VersionsPage(),
                 "link" => new LinkPage(),
                 "tools" => new ToolsPage(),
                 "settings" => new SettingsPage(),
@@ -323,12 +325,54 @@ public sealed partial class MainWindow : Window
 
         ContentFrame.Content = page;
         UpdateNavSelection(tag);
+        PlayPageEntrance(page);
     }
 
     /// <summary>打开指定版本的设置页。</summary>
     public void ShowVersionSettings(string versionId)
     {
-        ContentFrame.Content = new VersionSettingsPage(versionId);
+        var page = new VersionSettingsPage(versionId);
+        ContentFrame.Content = page;
+        PlayPageEntrance(page);
+    }
+
+    /// <summary>
+    /// 页面入场动画：淡入 + 轻微上浮，观感参考 Microsoft Store 的页面切换。
+    /// 动画放在隐式显示（Opacity 0→1）上，不改变布局尺寸，
+    /// 因此不会让内部控件因为测量变化而重排。
+    /// </summary>
+    private static void PlayPageEntrance(UIElement? page)
+    {
+        if (page is null) return;
+
+        page.Opacity = 0;
+
+        var transform = new TranslateTransform { Y = 12 };
+        page.RenderTransform = transform;
+
+        var fade = new DoubleAnimation
+        {
+            From = 0, To = 1,
+            Duration = TimeSpan.FromMilliseconds(240),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+
+        var slide = new DoubleAnimation
+        {
+            From = 12, To = 0,
+            Duration = TimeSpan.FromMilliseconds(280),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+        };
+
+        Storyboard.SetTarget(fade, page);
+        Storyboard.SetTargetProperty(fade, "Opacity");
+        Storyboard.SetTarget(slide, transform);
+        Storyboard.SetTargetProperty(slide, "Y");
+
+        var storyboard = new Storyboard();
+        storyboard.Children.Add(fade);
+        storyboard.Children.Add(slide);
+        storyboard.Begin();
     }
 
     private void UpdateNavSelection(string tag)

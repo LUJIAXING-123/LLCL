@@ -1652,6 +1652,8 @@ public sealed partial class DownloadPage : Page
 
         var card = _tasks.FirstOrDefault(t => t.Id == task.Id);
 
+        var running = task.State is DownloadState.Running or DownloadState.Paused or DownloadState.Idle;
+
         if (card is null)
         {
             // 新任务：补进列表，否则进度无处可写
@@ -1661,7 +1663,9 @@ public sealed partial class DownloadPage : Page
                 Title = task.Title,
                 Detail = task.ProgressText,
                 State = task.StateText,
-                Ratio = task.Ratio
+                Ratio = task.Ratio,
+                ActionLabel = running ? "取消并清理" : "清理",
+                CanTogglePause = running
             };
             _tasks.Add(card);
         }
@@ -1670,6 +1674,10 @@ public sealed partial class DownloadPage : Page
             card.Detail = task.ProgressText;
             card.State = task.StateText;
             card.Ratio = task.Ratio;
+
+            // 失败/完成的任务按钮变成「清理」，暂停按钮置灰
+            card.ActionLabel = running ? "取消并清理" : "清理";
+            card.CanTogglePause = running;
         }
 
         // 底部进度条与按钮状态跟随真实任务

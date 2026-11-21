@@ -30,10 +30,28 @@ public sealed class VersionItem
     public string Url { get; init; } = string.Empty;
 }
 
-public sealed class PeerItem
+public sealed class PeerItem : System.ComponentModel.INotifyPropertyChanged
 {
     public string Name { get; init; } = string.Empty;
-    public string Info { get; init; } = string.Empty;
+
+    private string _info = string.Empty;
+
+    /// <summary>
+    /// 延迟等会频繁变化，做成可通知的属性，
+    /// 这样只更新这一行而不用重建整张成员列表。
+    /// </summary>
+    public string Info
+    {
+        get => _info;
+        set
+        {
+            if (_info == value) return;
+            _info = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Info)));
+        }
+    }
+
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 }
 
 public sealed class HistoryItem
@@ -125,6 +143,27 @@ public sealed class TaskCard : System.ComponentModel.INotifyPropertyChanged
     {
         get => _ratio;
         set => SetField(ref _ratio, value, nameof(Ratio));
+    }
+
+    private string _actionLabel = "取消并清理";
+
+    /// <summary>
+    /// 右侧按钮文案。失败/完成的任务已经是终态，按钮应当变成「清理」，
+    /// 否则用户看到「取消并清理」会以为任务还在跑。
+    /// </summary>
+    public string ActionLabel
+    {
+        get => _actionLabel;
+        set => SetField(ref _actionLabel, value, nameof(ActionLabel));
+    }
+
+    private bool _canTogglePause = true;
+
+    /// <summary>已结束的任务不能再暂停，按钮应置灰。</summary>
+    public bool CanTogglePause
+    {
+        get => _canTogglePause;
+        set => SetField(ref _canTogglePause, value, nameof(CanTogglePause));
     }
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;

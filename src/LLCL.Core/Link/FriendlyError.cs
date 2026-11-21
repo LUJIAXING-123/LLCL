@@ -127,16 +127,16 @@ public static class FriendlyError
             error ??= null; // 低于 1024 的端口可能被系统占用，允许但提示
         }
 
+        // 注意：不要用 TcpListener 绑定该端口来判断可用性。
+        // 这个端口通常是 Minecraft 局域网世界"自己正在监听"的端口，
+        // 绑定它必然失败（AddressAlreadyInUse / AccessDenied），
+        // 但这对 LLCL 没有影响：房间只是把该端口转发到虚拟网络。
+        // 真正需要确认的是"能否连接到它"，即它确实有人在监听。
+        var probe = new System.Net.Sockets.TcpClient();
+        var connect = probe.ConnectAsync(System.Net.IPAddress.Loopback, port);
+
         try
         {
-            // 注意：不要用 TcpListener 绑定该端口来判断可用性。
-            // 这个端口通常是 Minecraft 局域网世界"自己正在监听"的端口，
-            // 绑定它必然失败（AddressAlreadyInUse / AccessDenied），
-            // 但这对 LLCL 没有影响：房间只是把该端口转发到虚拟网络。
-            // 真正需要确认的是"能否连接到它"，即它确实有人在监听。
-            using var probe = new System.Net.Sockets.TcpClient();
-            var connect = probe.ConnectAsync(System.Net.IPAddress.Loopback, port);
-
             if (!connect.Wait(ProbeTimeout))
             {
                 error = $"端口 {port} 上没有检测到运行中的游戏。\n" +
@@ -144,7 +144,6 @@ public static class FriendlyError
                 return false;
             }
 
-            probe.Close();
             return true;
         }
         catch (AggregateException ex) when (ex.InnerException is SocketException se)
@@ -162,6 +161,32 @@ public static class FriendlyError
             error = $"无法检测端口 {port}：{ex.Message}";
             return false;
         }
+        finally
+        {
+            // 必须观察连接任务，再做释放。
+            // 超时分支下连接仍在进行，释放 socket 会让它以
+            // SocketException(995) 失败；无人观察的异常会在终结器线程
+            // 重新抛出，直接弹出「LLCL 遇到严重错误」并写入 crash.log。
+            Observe(connect);
+            try { probe.Dispose(); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// 挂一个观察者把任务异常吃掉，避免未观察异常触发进程级崩溃。
+    /// </summary>
+    private static void Observe(Task task)
+    {
+        if (task.IsCompleted)
+        {
+            _ = task.Exception;
+            return;
+        }
+
+        task.ContinueWith(static t => _ = t.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>端口连通性检测的超时时间。</summary>
