@@ -313,6 +313,76 @@ public static class LoaderInstaller
         }
     }
 
+    /// <summary>
+    /// 版本 JSON 读不到时，按 MC 版本号推断所需 Java 主版本。
+    /// 对照官方要求：1.18 起要 17，1.17 要 16，1.16 及更早用 8。
+    /// </summary>
+    private static int InferJavaMajor(string mcVersion)
+    {
+        try
+        {
+            var parts = mcVersion.Split('.');
+            if (parts.Length < 2 || !int.TryParse(parts[0], out var major))
+                return 17; // 认不出来时按较新的要求走，宁可多要 17
+
+            if (major != 1) return 17; // 26.x 之类的新版本
+
+            if (!int.TryParse(parts[1], out var minor)) return 17;
+
+            return minor switch
+            {
+                >= 18 => 17,
+                17 => 16,
+                _ => 8
+            };
+        }
+        catch
+        {
+            return 17;
+        }
+    }
+
+    /// <summary>
+    /// 把内嵌的安装器外壳解出到缓存目录，返回 jar 路径。
+    /// 解不出来返回 null，调用方退回官方安装方式。
+    /// </summary>
+    private static string? TryExtractForgeShim()
+    {
+        try
+        {
+            var target = Path.Combine(Paths.CacheDir, "forge-shim.jar");
+
+            // 每次都重新写出，不复用缓存。
+            // 只有 4 KB，代价可以忽略；而一旦复用了旧 jar（例如换了包名、
+            // 或上次写出的是不完整的文件），就会出现「找不到主类」这类
+            // 与当前代码对不上的怪错误。
+            var assembly = typeof(LoaderInstaller).Assembly;
+            using var stream = assembly.GetManifestResourceStream("LLCL.Core.forge-shim.jar");
+            if (stream is null)
+            {
+                Logger.Warn("未找到内嵌的安装器外壳，将使用官方安装方式");
+                return null;
+            }
+
+            Directory.CreateDirectory(Paths.CacheDir);
+
+            // 先写临时文件再改名，避免中途失败留下半个 jar
+            var temp = target + ".tmp";
+            using (var file = File.Create(temp))
+                stream.CopyTo(file);
+
+            File.Move(temp, target, true);
+
+            Logger.Info($"已释放安装器外壳：{target}（{new FileInfo(target).Length} 字节）");
+            return target;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"释放安装器外壳失败，将使用官方安装方式: {ex.Message}");
+            return null;
+        }
+    }
+
     /// <summary>Fabric / Quilt：meta API 直接返回完整的 profile JSON。</summary>
     private static async Task<string> _InstallFabricAsync(string mcVersion, string loaderVersion,
         string loaderName, IProgress<(string step, double ratio)>? progress, CancellationToken ct)
@@ -613,7 +683,17 @@ public static class LoaderInstaller
         Exception? last = null;
         var downloaded = false;
 
-        foreach (var url in installers)
+        // 缓存里已有可用的安装器就直接复用。
+        // 这个 jar 有 8 MB 左右，每次安装都重新下载既慢又容易失败；
+        // 而且下载目标被别的进程占用时（比如上次安装的 java 还没退），
+        // 写入会直接抛「文件被占用」，表现成莫名其妙的下载失败。
+        if (File.Exists(installerPath) && new FileInfo(installerPath).Length > 1_000_000)
+        {
+            Logger.Info($"复用已缓存的 {label} 安装器：{installerPath}");
+            downloaded = true;
+        }
+
+        foreach (var url in downloaded ? [] : installers)
         {
             try
             {
@@ -634,22 +714,33 @@ public static class LoaderInstaller
 
         progress?.Report(($"运行 {label} 安装器", 0.65));
 
-        // 选择 Java：Forge/NeoForge 安装器需要与目标 MC 匹配的 Java
-        var requiredJava = 8;
+        // 选择 Java：Forge/NeoForge 安装器需要与目标 MC 匹配的 Java。
+        // 优先读版本 JSON；读不到（原版尚未安装、或版本目录被清理）时按 MC 版本号推断，
+        // 不能一律退回 8——1.18 之后的安装器用 Java 8 根本跑不起来，
+        // 实测会挑到 java8path 的 javaw，随后安装器直接崩掉。
+        int requiredJava;
         try
         {
-            requiredJava = VersionLoader.Load(mcVersion).JavaVersion?.MajorVersion ?? 8;
+            requiredJava = VersionLoader.Load(mcVersion).JavaVersion?.MajorVersion
+                           ?? InferJavaMajor(mcVersion);
         }
         catch
         {
-            // 原版未安装时使用默认值
+            requiredJava = InferJavaMajor(mcVersion);
         }
 
         var javaPath = JavaScanner.SelectForVersion(requiredJava)?.Path;
         if (javaPath is null)
             throw new InvalidOperationException($"{label} 安装需要 Java {requiredJava}，但未找到对应运行时");
 
-        Logger.Info($"运行安装器: {javaPath} -jar {installerPath} --installClient {Paths.MinecraftDir}");
+        // 优先走自带的安装器外壳：它把下载源换成 BMCLAPI 并跳过 mojmaps，
+        // 国内网络下比官方入口快一个数量级。拿不到外壳时退回官方方式。
+        var shimPath = TryExtractForgeShim();
+        var useShim = shimPath is not null;
+
+        Logger.Info(useShim
+            ? $"运行安装器（镜像模式）: {javaPath} -cp \"{shimPath};{installerPath}\" com.llcraft.forgeshim.ForgeInstaller {Paths.MinecraftDir}"
+            : $"运行安装器: {javaPath} -jar {installerPath} --installClient {Paths.MinecraftDir}");
 
         // 官方安装器自己会去若干镜像下载依赖（creeperhost / minecraftforge / mojang）。
         // 镜像不稳定时它会中途失败，只打印一句「A problem installing was detected」，
@@ -672,7 +763,9 @@ public static class LoaderInstaller
             var attemptPsi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = javaPath,
-                Arguments = $"-jar \"{installerPath}\" --installClient \"{Paths.MinecraftDir}\"",
+                Arguments = useShim
+                    ? $"-cp \"{shimPath};{installerPath}\" com.llcraft.forgeshim.ForgeInstaller \"{Paths.MinecraftDir}\" \"{installerPath}\""
+                    : $"-jar \"{installerPath}\" --installClient \"{Paths.MinecraftDir}\"",
                 WorkingDirectory = Paths.MinecraftDir,
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -812,6 +905,7 @@ public static class LoaderInstaller
         try { File.Delete(path); } catch { }
     }
 }
+
 
 
 

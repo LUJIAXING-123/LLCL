@@ -32,6 +32,15 @@
         <PackageReference Include="SharpZipLib" Version="1.4.2" />
     </ItemGroup>
 
+    <ItemGroup>
+        <!--
+          Forge / NeoForge 安装器外壳（约 4 KB）。
+          源码位于 build/forge-shim/src，改动后用 build/build-forge-shim.ps1 重新生成。
+          直接提交 jar 是为了让构建不依赖本机是否装了 JDK。
+        -->
+        <EmbeddedResource Include="Assets\forge-shim.jar" LogicalName="LLCL.Core.forge-shim.jar" />
+    </ItemGroup>
+
     <Import Project="$(_LlclRepoRoot)build\Version.targets" />
 </Project>
 
