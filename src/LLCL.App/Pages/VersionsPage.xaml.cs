@@ -98,10 +98,25 @@ public sealed partial class VersionsPage : Page
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => ApplyFilter();
 
+    /// <summary>
+    /// 点条目 = 选中为启动目标并回到首页；
+    /// 想改设置要点右侧的「设置」按钮，避免误点进设置页。
+    /// </summary>
     private void VersionList_ItemClick(object sender, ItemClickEventArgs e)
     {
-        if (e.ClickedItem is VersionItem item)
+        if (e.ClickedItem is not VersionItem item) return;
+
+        // 损坏的版本不能启动，直接送去设置页修
+        if (item.IsBroken)
+        {
             MainWindow.Instance?.ShowVersionSettings(item.Id);
+            return;
+        }
+
+        LauncherConfig.Current.LastInstance = item.Id;
+        LauncherConfig.Current.Save();
+
+        MainWindow.Instance?.Navigate("home");
     }
 
     private void ItemSettings_Click(object sender, RoutedEventArgs e)

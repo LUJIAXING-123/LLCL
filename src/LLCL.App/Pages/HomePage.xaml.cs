@@ -96,7 +96,7 @@ public sealed partial class HomePage : Page
             }
 
             _activeVersionId = versions[index];
-            CurrentVersionLine.Text = $"将启动 {entries[index].DisplayName}";
+            CurrentVersionText.Text = $"将启动 {entries[index].DisplayName}";
         }
         else
         {
@@ -108,7 +108,7 @@ public sealed partial class HomePage : Page
             }
 
             _activeVersionId = null;
-            CurrentVersionLine.Text = "尚未安装任何版本，请先到「版本列表」新建安装";
+            CurrentVersionText.Text = "尚未安装任何版本，请先到「版本列表」新建安装";
         }
 
         var broken = VersionManager.ScanAll().Count(e => e.IsBroken);
@@ -418,6 +418,7 @@ public sealed partial class HomePage : Page
         MainWindow.Instance?.ShowVersionSettings(version);
     }
 }
+
 
 
 

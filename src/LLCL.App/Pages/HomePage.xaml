@@ -91,19 +91,8 @@
                                             VerticalAlignment="Center"
                                             Click="LaunchButton_Click" />
 
-                                    <!-- 版本切换：改用按钮进版本列表，与 PCL 一致 -->
-                                    <Grid Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" ColumnSpacing="8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock x:Name="CurrentVersionLine" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Style="{StaticResource SubHeaderTextStyle}" />
-                                        <Button Grid.Column="1" Content="切换版本" Click="GoVersions_Click" />
-                                    </Grid>
-
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                                    <!-- 版本切换：直接点版本列表里的条目即可，不再单独放按钮 -->
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
                                                x:Name="LaunchStageText" Visibility="Collapsed"
                                                Style="{StaticResource SubHeaderTextStyle}"
                                                TextTrimming="CharacterEllipsis" />

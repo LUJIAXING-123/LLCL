@@ -28,8 +28,8 @@
         </Grid>
 
         <TextBox Grid.Row="1" x:Name="SearchBox" PlaceholderText="搜索版本名称"
-                 TextChanged="SearchBox_TextChanged" MaxWidth="420"
-                 HorizontalAlignment="Left" />
+                 TextChanged="SearchBox_TextChanged"
+                 HorizontalAlignment="Stretch" />
 
         <Grid Grid.Row="2">
             <ListView x:Name="VersionList" SelectionMode="None" IsItemClickEnabled="True"
