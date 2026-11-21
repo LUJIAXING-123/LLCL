@@ -298,6 +298,99 @@ public sealed partial class HomePage : Page
         }
     }
 
+    // ---------- 启动进度条（组合层动画） ----------
+    private Microsoft.UI.Composition.Visual? _progressVisual;
+    private double _progressValue;
+    private bool _progressMarquee;
+
+    /// <summary>取填充条的组合层 Visual，并把它锚在左侧，缩放才会从左往右长。</summary>
+    private Microsoft.UI.Composition.Visual? ProgressVisual()
+    {
+        if (_progressVisual is not null) return _progressVisual;
+
+        try
+        {
+            _progressVisual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview
+                .GetElementVisual(LaunchProgressFill);
+            _progressVisual.CenterPoint = System.Numerics.Vector3.Zero;
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"初始化进度条动画失败: {ex.Message}");
+            return null;
+        }
+
+        return _progressVisual;
+    }
+
+    /// <summary>
+    /// 把进度推进到指定比例。
+    /// <para>
+    /// 用组合层关键帧动画驱动 Scale，动画在合成器线程执行，
+    /// 不参与 UI 线程布局，因此既平滑又不会拖慢窗口。
+    /// （ProgressBar 的 Value 补间属于依赖动画，正好相反。）
+    /// </para>
+    /// </summary>
+    private void SetProgressRatio(double ratio)
+    {
+        var visual = ProgressVisual();
+        if (visual is null) return;
+
+        StopMarquee(visual);
+
+        var compositor = visual.Compositor;
+
+        var animation = compositor.CreateVector3KeyFrameAnimation();
+        animation.InsertKeyFrame(
+            1f,
+            new System.Numerics.Vector3((float)ratio, 1f, 1f),
+            compositor.CreateCubicBezierEasingFunction(
+                new System.Numerics.Vector2(0f, 0f),
+                new System.Numerics.Vector2(0.2f, 1f)));
+        animation.Duration = TimeSpan.FromMilliseconds(280);
+
+        visual.StartAnimation("Scale", animation);
+        _progressValue = ratio;
+        _progressMarquee = false;
+    }
+
+    /// <summary>
+    /// 不确定态：一条 30% 宽的条从左滑到右，循环播放。
+    /// 用于「等待游戏窗口」这种没有可量化进度的阶段。
+    /// </summary>
+    private void StartMarquee()
+    {
+        if (_progressMarquee) return;
+
+        var visual = ProgressVisual();
+        if (visual is null) return;
+
+        var width = (float)Math.Max(1, LaunchProgressFill.ActualWidth);
+        if (width <= 1) width = (float)Math.Max(1, LaunchProgress.ActualWidth);
+        if (width <= 1) width = 400f;
+
+        var compositor = visual.Compositor;
+
+        // 只显示 30% 宽，再横向平移，形成走马灯效果
+        visual.StopAnimation("Scale");
+        visual.Scale = new System.Numerics.Vector3(0.3f, 1f, 1f);
+
+        var move = compositor.CreateScalarKeyFrameAnimation();
+        move.InsertKeyFrame(0f, 0f);
+        move.InsertKeyFrame(1f, width * 0.7f);
+        move.Duration = TimeSpan.FromSeconds(1.1);
+        move.IterationBehavior = Microsoft.UI.Composition.AnimationIterationBehavior.Forever;
+
+        visual.StartAnimation("Offset.X", move);
+        _progressMarquee = true;
+    }
+
+    private static void StopMarquee(Microsoft.UI.Composition.Visual visual)
+    {
+        visual.StopAnimation("Offset.X");
+        visual.Offset = System.Numerics.Vector3.Zero;
+    }
+
     /// <summary>启动阶段回调，更新提示文字与进度。</summary>
     private void OnLaunchStage(GameLaunchService.LaunchStage stage)
     {
@@ -307,21 +400,16 @@ public sealed partial class HomePage : Page
 
             var target = Math.Clamp(stage.Ratio, 0, 1);
 
-            // 直接赋值，不用 Storyboard 做补间。
-            // ProgressBar.Value 的补间属于「依赖动画」，每帧都要在 UI 线程
-            // 重新布局，与不确定态动画叠加时会把界面拖住，
-            // 结果是既看不到平滑效果，窗口还会卡上一会儿。
-            if (target > LaunchProgress.Value)
+            if (target > _progressValue + 0.001)
             {
-                LaunchProgress.IsIndeterminate = false;
-                LaunchProgress.Value = target;
+                SetProgressRatio(target);
             }
             else
             {
                 // 进度不再增长说明这一步没有可量化的进度
                 // （最典型的是「等待游戏窗口」要等十几秒），
-                // 这时切到不确定态，让用户看到还在动，而不是停在某个百分比上。
-                LaunchProgress.IsIndeterminate = true;
+                // 切成走马灯，让用户看到还在动而不是停在某个位置。
+                StartMarquee();
             }
         });
     }
@@ -338,17 +426,37 @@ public sealed partial class HomePage : Page
             LaunchButton.Content = "启动中…";
             LaunchStageText.Text = "正在准备…";
 
-            // 未知阶段用不确定态，避免长时间停在 0% 让人以为没反应
-            LaunchProgress.IsIndeterminate = true;
-            LaunchProgress.Value = 0;
+            _progressValue = 0;
+            _progressMarquee = false;
+
+            var visual = ProgressVisual();
+            if (visual is not null)
+            {
+                visual.StopAnimation("Scale");
+                visual.Scale = new System.Numerics.Vector3(0f, 1f, 1f);
+                StopMarquee(visual);
+            }
 
             FadeIn(LaunchProgress);
+
+            // 布局完成后再开走动效，否则拿不到填充条的真实宽度
+            _ = DispatcherQueue.TryEnqueue(StartMarquee);
         }
         else
         {
             LaunchButton.Content = "启动";
             LaunchStageText.Text = string.Empty;
-            LaunchProgress.Value = 0;
+
+            _progressValue = 0;
+            _progressMarquee = false;
+
+            var visual = ProgressVisual();
+            if (visual is not null)
+            {
+                visual.StopAnimation("Scale");
+                visual.Scale = new System.Numerics.Vector3(0f, 1f, 1f);
+                StopMarquee(visual);
+            }
         }
     }
 

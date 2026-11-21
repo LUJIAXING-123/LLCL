@@ -98,11 +98,27 @@
                                                TextTrimming="CharacterEllipsis" />
                                 </Grid>
 
-                                <!-- 进度条紧贴卡片底部：占满宽度，下沿与卡片圆角对齐 -->
-                                <ProgressBar Grid.Row="1" x:Name="LaunchProgress"
-                                             IsIndeterminate="True" Value="0"
-                                             Height="4" CornerRadius="0,0,8,8"
-                                             Visibility="Collapsed" />
+                                <!--
+                                  自绘进度条，紧贴卡片底部。
+                                  用 ProgressBar 的 Value 补间属于「依赖动画」，
+                                  每帧都要在 UI 线程重新布局，实际既不生效还会拖慢界面。
+                                  这里改成两个矩形，由组合层动画驱动，不占 UI 线程。
+                                -->
+                                <Grid Grid.Row="1" x:Name="LaunchProgress"
+                                      Height="4" Visibility="Collapsed"
+                                      CornerRadius="0,0,8,8">
+                                    <Grid x:Name="LaunchProgressTrack"
+                                          Background="{ThemeResource ControlStrokeColorDefaultBrush}"
+                                          CornerRadius="0,0,8,8" />
+                                    <!--
+                                      填充条铺满整宽，由组合层的 Scale.X 控制可见比例，
+                                      这样比例变化不需要重新测量布局。
+                                    -->
+                                    <Border x:Name="LaunchProgressFill"
+                                            Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                            HorizontalAlignment="Stretch"
+                                            CornerRadius="0,0,8,8" />
+                                </Grid>
                             </Grid>
                         </Border>
 
