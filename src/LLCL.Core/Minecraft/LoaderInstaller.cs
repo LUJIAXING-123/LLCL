@@ -649,46 +649,70 @@ public static class LoaderInstaller
         if (javaPath is null)
             throw new InvalidOperationException($"{label} 安装需要 Java {requiredJava}，但未找到对应运行时");
 
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = javaPath,
-            Arguments = $"-jar \"{installerPath}\" --installClient \"{Paths.MinecraftDir}\"",
-            WorkingDirectory = Paths.MinecraftDir,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
         Logger.Info($"运行安装器: {javaPath} -jar {installerPath} --installClient {Paths.MinecraftDir}");
 
-        using var process = System.Diagnostics.Process.Start(psi)
-                            ?? throw new InvalidOperationException("无法启动安装器进程");
+        // 官方安装器自己会去若干镜像下载依赖（creeperhost / minecraftforge / mojang）。
+        // 镜像不稳定时它会中途失败，只打印一句「A problem installing was detected」，
+        // 退出码 1。实测同一台机器上重跑一次就能成功，
+        // 所以这里重试几次，而不是把瞬时网络故障直接当安装失败报给用户。
+        const int maxAttempts = 3;
+        var lastOutput = string.Empty;
 
-        var output = new System.Text.StringBuilder();
-        var readTask = Task.Run(async () =>
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            while (await process.StandardOutput.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
+            ct.ThrowIfCancellationRequested();
+
+            if (attempt > 1)
             {
-                output.AppendLine(line);
-                Logger.Info("[安装器] " + line);
+                Logger.Info($"{label} 安装器第 {attempt} 次尝试");
+                progress?.Report(($"重试 {label} 安装器（{attempt}/{maxAttempts}）", 0.65));
+                await Task.Delay(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false);
             }
-        }, ct);
 
-        var errTask = Task.Run(async () =>
-        {
-            while (await process.StandardError.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
+            var attemptPsi = new System.Diagnostics.ProcessStartInfo
             {
-                output.AppendLine(line);
-                Logger.Warn("[安装器] " + line);
-            }
-        }, ct);
+                FileName = javaPath,
+                Arguments = $"-jar \"{installerPath}\" --installClient \"{Paths.MinecraftDir}\"",
+                WorkingDirectory = Paths.MinecraftDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
 
-        await process.WaitForExitAsync(ct).ConfigureAwait(false);
-        await Task.WhenAll(readTask, errTask).ConfigureAwait(false);
+            using var process = System.Diagnostics.Process.Start(attemptPsi)
+                                ?? throw new InvalidOperationException("无法启动安装器进程");
 
-        if (process.ExitCode != 0)
-            throw new IOException($"{label} 安装器退出码 {process.ExitCode}：\n{output}");
+            var output = new System.Text.StringBuilder();
+            var readTask = Task.Run(async () =>
+            {
+                while (await process.StandardOutput.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
+                {
+                    output.AppendLine(line);
+                    Logger.Info("[安装器] " + line);
+                }
+            }, ct);
+
+            var errTask = Task.Run(async () =>
+            {
+                while (await process.StandardError.ReadLineAsync(ct).ConfigureAwait(false) is { } line)
+                {
+                    output.AppendLine(line);
+                    Logger.Warn("[安装器] " + line);
+                }
+            }, ct);
+
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            await Task.WhenAll(readTask, errTask).ConfigureAwait(false);
+
+            if (process.ExitCode == 0) break;
+
+            lastOutput = output.ToString();
+            Logger.Warn($"{label} 安装器第 {attempt} 次失败，退出码 {process.ExitCode}");
+
+            if (attempt == maxAttempts)
+                throw new IOException($"{label} 安装器退出码 {process.ExitCode}：\n{lastOutput}");
+        }
 
         TryDelete(installerPath);
 

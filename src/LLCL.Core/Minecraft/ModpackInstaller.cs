@@ -138,27 +138,50 @@ public static class ModpackInstaller
         }
 
         // ---------- 3. 安装游戏与加载器 ----------
-        progress?.Report(("正在安装游戏本体", 0.55));
-        await VanillaInstaller.InstallAsync(info.MinecraftVersion, versionsRoot, null, ct)
-            .ConfigureAwait(false);
-
-        // 启动目标：有加载器就是加载器版本，否则是原版
-        var launchSourceId = info.MinecraftVersion;
-
-        if (info.Loader is { } kind && !string.IsNullOrWhiteSpace(info.LoaderVersion))
+        // 这一段失败时实例目录里只剩 overrides（mods / config），
+        // 没有版本 JSON，会在版本列表里显示成一个「损坏」的空壳。
+        // 所以失败时把刚建好的实例目录删掉，让用户可以干净地重试。
+        try
         {
-            progress?.Report(($"正在安装 {kind} {info.LoaderVersion}", 0.75));
-            launchSourceId = await LoaderInstaller.InstallAsync(kind, info.MinecraftVersion,
-                info.LoaderVersion, null, ct).ConfigureAwait(false);
-        }
+            progress?.Report(("正在安装游戏本体", 0.55));
+            await VanillaInstaller.InstallAsync(info.MinecraftVersion, versionsRoot, null, ct)
+                .ConfigureAwait(false);
 
-        // ---------- 4. 为实例生成自己的版本文件 ----------
-        // 上一步把游戏与加载器装在了各自命名的目录里，实例目录下只有 overrides。
-        // 版本管理器要求存在 <实例>/<实例>.json，否则会判定为「缺少版本 JSON」而标红。
-        // 这里把启动目标的版本文件复制到实例目录并改成实例 ID，
-        // 让实例成为可独立启动的完整版本。
-        progress?.Report(("正在生成版本文件", 0.9));
-        CreateInstanceVersion(instanceId, launchSourceId, versionsRoot);
+            // 启动目标：有加载器就是加载器版本，否则是原版
+            var launchSourceId = info.MinecraftVersion;
+
+            if (info.Loader is { } kind && !string.IsNullOrWhiteSpace(info.LoaderVersion))
+            {
+                progress?.Report(($"正在安装 {kind} {info.LoaderVersion}", 0.75));
+                launchSourceId = await LoaderInstaller.InstallAsync(kind, info.MinecraftVersion,
+                    info.LoaderVersion, null, ct).ConfigureAwait(false);
+            }
+
+            // ---------- 4. 为实例生成自己的版本文件 ----------
+            // 上一步把游戏与加载器装在了各自命名的目录里，实例目录下只有 overrides。
+            // 版本管理器要求存在 <实例>/<实例>.json，否则会判定为「缺少版本 JSON」而标红。
+            // 这里把启动目标的版本文件复制到实例目录并改成实例 ID，
+            // 让实例成为可独立启动的完整版本。
+            progress?.Report(("正在生成版本文件", 0.9));
+            CreateInstanceVersion(instanceId, launchSourceId, versionsRoot);
+        }
+        catch (OperationCanceledException)
+        {
+            CleanupFailedInstance(instanceDir);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            CleanupFailedInstance(instanceDir);
+
+            // 加载器安装失败最常见的原因是官方安装器自身下载依赖时断流，
+            // 给出可操作的提示，而不是让用户对着堆栈发呆。
+            throw new InvalidOperationException(
+                "整合包的游戏或加载器未能安装完成，已清理未完成的实例。\n" +
+                "这通常是因为从官方源下载依赖时网络中断，请重试；\n" +
+                "若持续失败，可先单独安装好对应版本的加载器再安装整合包。\n\n" +
+                $"原始错误：{ex.Message}", ex);
+        }
 
         // ---------- 5. 记录整合包信息 ----------
         var settings = VersionSettings.Load(instanceId);
@@ -170,6 +193,22 @@ public static class ModpackInstaller
 
         progress?.Report(("安装完成", 1.0));
         return instanceId;
+    }
+
+    /// <summary>安装中途失败时，把只铺了 overrides 的实例目录整个删掉。</summary>
+    private static void CleanupFailedInstance(string instanceDir)
+    {
+        try
+        {
+            if (!Directory.Exists(instanceDir)) return;
+
+            Directory.Delete(instanceDir, true);
+            Logger.Info($"[整合包] 已清理未完成的实例目录：{instanceDir}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"[整合包] 清理实例目录失败: {ex.Message}");
+        }
     }
 
     /// <summary>
