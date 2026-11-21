@@ -112,9 +112,14 @@ public static class ResourceService
         try
         {
             var from = source == ResourceSource.Modrinth ? "modrinth" : "curseforge";
-            var json = await GetJsonAsync($"https://mod.mcimirror.top/translate/{from}/{id}", ct)
+
+            // 只请求一次。没有译文的项目会返回 404，这是正常情况，
+            // 默认重试 3 次会让每条未收录的模组白等四秒并刷一堆告警。
+            var body = await Net.Http.GetStringAsync(
+                    $"https://mod.mcimirror.top/translate/{from}/{id}", 1, ct)
                 .ConfigureAwait(false);
 
+            var json = System.Text.Json.Nodes.JsonNode.Parse(body);
             var text = json?["translated"]?.GetValue<string>();
             var result = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 

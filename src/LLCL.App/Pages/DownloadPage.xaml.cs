@@ -1428,10 +1428,11 @@ public sealed partial class DownloadPage : Page
     private async Task FillTranslationsAsync(List<ResourceCard> cards)
     {
         using var gate = new SemaphoreSlim(6);
+        var hits = 0;
 
         var tasks = cards.Select(async card =>
         {
-            if (string.IsNullOrWhiteSpace(card.Name)) return;
+            if (string.IsNullOrWhiteSpace(card.Id)) return;
 
             await gate.WaitAsync().ConfigureAwait(false);
             try
@@ -1447,6 +1448,7 @@ public sealed partial class DownloadPage : Page
 
                 if (string.IsNullOrWhiteSpace(translated)) return;
 
+                Interlocked.Increment(ref hits);
                 Dispatch(() => card.Translated = translated);
             }
             catch
@@ -1460,6 +1462,9 @@ public sealed partial class DownloadPage : Page
         });
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        // 没有这条日志就无法判断「没显示」是没取到还是界面没更新
+        Logger.Info($"[翻译] 本页 {cards.Count} 条，取到中文简介 {hits} 条");
     }
 
     private static string FormatDownloads(long count)

@@ -37,11 +37,18 @@ public sealed class ResourceCard : System.ComponentModel.INotifyPropertyChanged
             if (_translated == value) return;
             _translated = value;
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Translated)));
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(TranslatedText)));
             PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(HasTranslated)));
         }
     }
 
-    /// <summary>是否有中文简介，用于控制那一行的可见性。</summary>
+    /// <summary>
+    /// 列表里显示的中文简介。未取到译文时是空字符串，
+    /// 空文本不占高度，因此不需要再控制可见性。
+    /// </summary>
+    public string TranslatedText => _translated ?? string.Empty;
+
+    /// <summary>是否有中文简介。</summary>
     public bool HasTranslated => !string.IsNullOrWhiteSpace(_translated);
 
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
