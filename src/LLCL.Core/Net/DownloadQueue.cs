@@ -24,6 +24,13 @@ public sealed class DownloadTask
     public long SpeedBytesPerSecond { get; internal set; }
     public string? CurrentFile { get; internal set; }
     public string? ErrorMessage { get; internal set; }
+
+    /// <summary>
+    /// 是否处于「不确定进度」状态。
+    /// 运行安装器这类阶段没有可量化的比例，界面应显示滚动条而不是固定百分比。
+    /// </summary>
+    public bool IsIndeterminate { get; internal set; }
+
     public DateTime StartedAt { get; } = DateTime.Now;
 
     /// <summary>
@@ -46,6 +53,11 @@ public sealed class DownloadTask
             if (State == DownloadState.Failed) return ErrorMessage ?? "下载失败";
             if (State == DownloadState.Canceled) return "已取消";
             if (State == DownloadState.Idle) return "等待中";
+
+            // 不确定进度阶段（例如运行安装器）直接显示阶段提示，
+            // 这时没有字节数可报，显示「已下载 0 B」反而像卡住了。
+            if (IsIndeterminate && !string.IsNullOrWhiteSpace(CurrentFile))
+                return CurrentFile!;
 
             var done = FormatSize(DownloadedBytes);
 
@@ -266,6 +278,33 @@ public static class DownloadQueue
         // 把终态返回给调用方。用户取消是正常结束、不抛异常，
         // 调用方需要据此判断该显示「已完成」还是「已取消」。
         return task.State;
+    }
+
+    /// <summary>
+    /// 把正在运行的任务切换成「不确定进度」并显示给定提示；
+    /// 传 null 表示恢复按实际比例显示。
+    /// <para>
+    /// 用于运行安装器这类没有可量化进度的阶段：进度条一直在动，
+    /// 但比例长时间不变，界面看起来像卡住。
+    /// </para>
+    /// </summary>
+    public static void SetIndeterminate(string? stageText)
+    {
+        List<DownloadTask> affected = [];
+
+        lock (_lock)
+        {
+            foreach (var task in _tasks)
+            {
+                if (task.State != DownloadState.Running) continue;
+
+                task.IsIndeterminate = stageText is not null;
+                if (stageText is not null) task.CurrentFile = stageText;
+                affected.Add(task);
+            }
+        }
+
+        foreach (var task in affected) _Notify(task);
     }
 
     /// <summary>

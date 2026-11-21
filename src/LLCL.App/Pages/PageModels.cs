@@ -166,6 +166,15 @@ public sealed class TaskCard : System.ComponentModel.INotifyPropertyChanged
         set => SetField(ref _canTogglePause, value, nameof(CanTogglePause));
     }
 
+    private bool _isIndeterminate;
+
+    /// <summary>安装器等无量化进度的阶段显示滚动条。</summary>
+    public bool IsIndeterminate
+    {
+        get => _isIndeterminate;
+        set => SetField(ref _isIndeterminate, value, nameof(IsIndeterminate));
+    }
+
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
     private void SetField<T>(ref T field, T value, string name)

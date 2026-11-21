@@ -749,6 +749,11 @@ public static class LoaderInstaller
         const int maxAttempts = 3;
         var lastOutput = string.Empty;
 
+        // 安装器要跑几十秒到几分钟，期间没有任何可量化的进度。
+        // 用负比例告诉上层「切成滚动条」，并给出说明文字，
+        // 否则进度条会长时间停在 65% 不动，看起来像卡死。
+        progress?.Report(($"正在运行 {label} 安装器，请稍候（关闭游戏可减少干扰）…", -1));
+
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();

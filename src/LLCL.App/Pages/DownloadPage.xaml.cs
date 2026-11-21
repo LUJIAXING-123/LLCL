@@ -1693,7 +1693,8 @@ public sealed partial class DownloadPage : Page
                 State = task.StateText,
                 Ratio = task.Ratio,
                 ActionLabel = actionLabel,
-                CanTogglePause = running
+                CanTogglePause = running,
+                IsIndeterminate = task.IsIndeterminate
             };
             _tasks.Add(card);
         }
@@ -1704,6 +1705,7 @@ public sealed partial class DownloadPage : Page
             card.Ratio = task.Ratio;
             card.ActionLabel = actionLabel;
             card.CanTogglePause = running;
+            card.IsIndeterminate = task.IsIndeterminate;
         }
 
         // 底部进度条与按钮状态跟随真实任务
@@ -1879,8 +1881,17 @@ public sealed partial class DownloadPage : Page
     private IProgress<(string step, double ratio)> MakeProgress() =>
         new Progress<(string step, double ratio)>(p =>
         {
-            DownloadProgress.Value = Math.Clamp(p.ratio, 0, 1);
+            // 约定：ratio < 0 表示「这一步没有可量化的进度」，
+            // 例如运行 Forge 安装器要跑几十秒到几分钟，期间进度不会推进。
+            // 这种阶段切换成滚动条，并同步到任务卡，避免看起来像卡死。
+            var indeterminate = p.ratio < 0;
+
+            DownloadProgress.IsIndeterminate = indeterminate;
+            if (!indeterminate) DownloadProgress.Value = Math.Clamp(p.ratio, 0, 1);
+
             ProgressText.Text = p.step;
+
+            DownloadQueue.SetIndeterminate(indeterminate ? p.step : null);
         });
 
     private void Pause_Click(object sender, RoutedEventArgs e)
