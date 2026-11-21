@@ -409,9 +409,9 @@ public sealed class FileDownloader
         while (true)
         {
             // 自己的闸门被关闭（本下载器被暂停），
-            // 或队列的全局闸门被关闭（用户暂停了整个任务）时都要等待。
+            // 或队列整体处于暂停状态（用户暂停了任务，内部另建的下载器也要停）时都要等待。
             var ownBlocked = _paused && !_resumeGate.IsSet;
-            var queueBlocked = !DownloadQueue.AmbientResume.IsSet;
+            var queueBlocked = DownloadQueue.IsQueuePaused;
 
             if (!ownBlocked && !queueBlocked) break;
 

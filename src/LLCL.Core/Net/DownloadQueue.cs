@@ -91,18 +91,20 @@ public sealed class DownloadTask
 public static class DownloadQueue
 {
     private static readonly List<DownloadTask> _tasks = [];
-    private static readonly SemaphoreSlim _runnerGate = new(1, 1);
+    private static readonly SemaphoreSlim _runnerGate = new(3, 3);
     private static readonly object _lock = new();
 
     /// <summary>
-    /// 全局暂停闸门（Set = 正在运行）。
+    /// 队列是否处于暂停状态。
     /// <para>
     /// 安装整合包、补全版本文件这些流程会在内部自行创建 FileDownloader，
     /// 队列拿不到那些实例，只暂停自己持有的下载器等于什么也没停住。
-    /// 所以暂停改成全局生效：队列放下闸门，所有下载器在传输循环里都会等待。
+    /// 所以暂停做成队列级：置位后所有下载器在传输循环里都会等待。
+    /// 用简单的 volatile 布尔而不是事件对象，
+    /// 避免多任务并行时 Set/Reset 互相覆盖导致状态错乱。
     /// </para>
     /// </summary>
-    internal static readonly ManualResetEventSlim AmbientResume = new(true);
+    internal static volatile bool IsQueuePaused;
 
     /// <summary>任务列表变化（新增 / 移除 / 状态更新）。</summary>
     public static event Action? Changed;
@@ -135,7 +137,7 @@ public static class DownloadQueue
     /// <param name="kind">任务类型。</param>
     /// <param name="work">实际下载逻辑，收到一个 <see cref="FileDownloader"/> 用于暂停控制。</param>
     /// <param name="ct">外部取消令牌。</param>
-    public static async Task RunAsync(string title, DownloadTaskKind kind,
+    public static async Task<DownloadState> RunAsync(string title, DownloadTaskKind kind,
         Func<FileDownloader, CancellationToken, Task> work, CancellationToken ct = default,
         string? targetVersion = null)
     {
@@ -154,7 +156,10 @@ public static class DownloadQueue
 
         _Notify(task);
 
-        // 串行化：同一时间只跑一个队列任务，避免占满带宽
+        // 允许并行的任务数。此前是 1（完全串行），
+        // 用户同时装整合包又要下模组时，后一个会一直排队到前一个结束，
+        // 看起来像「多个任务不能并行下载」。限制到 3 个既能并行，
+        // 又不至于把带宽摊薄到每个都很慢。
         var syncing = true;
 
         await _runnerGate.WaitAsync(ct).ConfigureAwait(false);
@@ -206,8 +211,10 @@ public static class DownloadQueue
                     task.SpeedBytesPerSecond = snapshot.SpeedBytesPerSecond;
                     task.CurrentFile = snapshot.CurrentFile;
 
-                    if (downloader.IsPaused) task.State = DownloadState.Paused;
-                    else if (task.State == DownloadState.Paused) task.State = DownloadState.Running;
+                    // 这里不要再改 task.State。
+                    // 之前按下载器状态回写 Running/Paused，会把 Pause() 刚设好的
+                    // 暂停状态在 500ms 内又翻回运行，界面上看起来就像「暂停没反应」。
+                    // 状态现在只由 Pause/Resume 与任务终态负责。
 
                     _NotifyProgress(task);
                 }
@@ -222,9 +229,12 @@ public static class DownloadQueue
         }
         catch (OperationCanceledException)
         {
+            // 用户主动取消不是错误，不要抛给调用方。
+            // 之前这里 throw 之后，调用方按「失败」处理，
+            // 界面上就会在正常取消后弹出一条「下载资源失败: A task was canceled.」。
             task.State = DownloadState.Canceled;
+            task.ErrorMessage = null;
             task.SpeedBytesPerSecond = 0;
-            throw;
         }
         catch (Exception ex)
         {
@@ -239,14 +249,23 @@ public static class DownloadQueue
             task.Cts?.Dispose();
             task.Cts = null;
 
-            // 任务结束时放开全局闸门，否则后续下载会一直卡在暂停等待里
-            AmbientResume.Set();
+            // 只有确实没有别的任务处于暂停时才放开全局闸门。
+            // 允许多任务并行后，这里如果无条件 Set，
+            // 任何一个任务结束都会把其他正在暂停的任务一起放开。
+            lock (_lock)
+            {
+                IsQueuePaused = _tasks.Any(t => t.State == DownloadState.Paused);
+            }
 
             _runnerGate.Release();
 
             // 终态必须广播一次，否则界面会停留在“下载中”
             _Notify(task);
         }
+
+        // 把终态返回给调用方。用户取消是正常结束、不抛异常，
+        // 调用方需要据此判断该显示「已完成」还是「已取消」。
+        return task.State;
     }
 
     /// <summary>
@@ -283,7 +302,7 @@ public static class DownloadQueue
                 task.State = DownloadState.Paused;
 
                 // 让所有下载器（含内部自行创建的那些）一起停下来
-                AmbientResume.Reset();
+                IsQueuePaused = true;
 
                 affected.Add(task);
             }
@@ -311,11 +330,8 @@ public static class DownloadQueue
             }
         }
 
-        // 只要还有任务处于暂停，就不放开全局闸门；
-        // 该继续的任务靠自己的下载器闸门恢复。
-        var stillPaused = false;
-        lock (_lock) stillPaused = _tasks.Any(t => t.State == DownloadState.Paused);
-        if (!stillPaused) AmbientResume.Set();
+        // 只要还有任务处于暂停，队列就保持暂停状态
+        lock (_lock) IsQueuePaused = _tasks.Any(t => t.State == DownloadState.Paused);
 
         foreach (var task in affected) _Notify(task);
         if (affected.Count == 0) Changed?.Invoke();
@@ -429,6 +445,8 @@ public static class DownloadQueue
         Changed?.Invoke();
     }
 }
+
+
 
 
 

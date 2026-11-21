@@ -891,7 +891,7 @@ public sealed partial class DownloadPage : Page
 
             // 必须走下载队列，否则不会出现在「下载任务」列表里，
             // 也无法暂停、取消或看到进度。
-            await DownloadQueue.RunAsync(
+            var finalState = await DownloadQueue.RunAsync(
                 $"下载 {mainFile.FileName}", DownloadTaskKind.Resource,
                 async (_, token) =>
                 {
@@ -911,9 +911,20 @@ public sealed partial class DownloadPage : Page
                 default,
                 versionId);
 
+            if (finalState == DownloadState.Canceled)
+            {
+                DetailStatus.Text = "已取消下载";
+                return;
+            }
+
             DetailStatus.Text = checkedDeps.Count > 0
                 ? $"已下载到版本「{versionId}」，含 {checkedDeps.Count} 个前置"
                 : $"已下载到版本「{versionId}」";
+        }
+        catch (OperationCanceledException)
+        {
+            // 取消是用户主动行为，不当作错误弹红字
+            DetailStatus.Text = "已取消下载";
         }
         catch (Exception ex)
         {
@@ -1462,7 +1473,7 @@ public sealed partial class DownloadPage : Page
 
         try
         {
-            await DownloadQueue.RunAsync(
+            var finalState = await DownloadQueue.RunAsync(
                 $"安装整合包 {info.Name}", DownloadTaskKind.Resource,
                 async (_, token) =>
                 {
@@ -1470,6 +1481,13 @@ public sealed partial class DownloadPage : Page
                 },
                 default,
                 instanceId);
+
+            if (finalState == DownloadState.Canceled)
+            {
+                // 用户取消是正常行为，不该报成功也不该报失败
+                ProgressText.Text = "已取消整合包安装";
+                return;
+            }
 
             ProgressText.Text = $"✓ 整合包已安装为版本「{instanceId}」，可在首页启动";
 
@@ -1654,6 +1672,16 @@ public sealed partial class DownloadPage : Page
 
         var running = task.State is DownloadState.Running or DownloadState.Paused or DownloadState.Idle;
 
+        // 按钮文案按最终状态区分：
+        // 进行中 → 取消；正常取消或已完成 → 删除任务；出错 → 清理。
+        // 用户看着「清理」会以为是出错，正常结束的任务不该出现这个词。
+        var actionLabel = task.State switch
+        {
+            DownloadState.Failed => "清理",
+            DownloadState.Canceled or DownloadState.Completed => "删除任务",
+            _ => "取消"
+        };
+
         if (card is null)
         {
             // 新任务：补进列表，否则进度无处可写
@@ -1664,7 +1692,7 @@ public sealed partial class DownloadPage : Page
                 Detail = task.ProgressText,
                 State = task.StateText,
                 Ratio = task.Ratio,
-                ActionLabel = running ? "取消并清理" : "清理",
+                ActionLabel = actionLabel,
                 CanTogglePause = running
             };
             _tasks.Add(card);
@@ -1674,9 +1702,7 @@ public sealed partial class DownloadPage : Page
             card.Detail = task.ProgressText;
             card.State = task.StateText;
             card.Ratio = task.Ratio;
-
-            // 失败/完成的任务按钮变成「清理」，暂停按钮置灰
-            card.ActionLabel = running ? "取消并清理" : "清理";
+            card.ActionLabel = actionLabel;
             card.CanTogglePause = running;
         }
 
